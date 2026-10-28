@@ -405,34 +405,45 @@ export const UploadAuditView: React.FC<UploadAuditViewProps> = ({
         </div>
 
         {/* Mode Switcher */}
-        <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-1 rounded-lg">
-          <button
-            type="button"
-            onClick={() => setActiveMode('single')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
-              activeMode === 'single'
-                ? 'bg-cyan-400 text-slate-900 shadow'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Audit Langsung
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveMode('batch')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors flex items-center gap-1.5 ${
-              activeMode === 'batch'
-                ? 'bg-cyan-400 text-slate-900 shadow'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <span>Kelola 15 Sampel</span>
-            {batchQueue.length > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full bg-slate-900 text-cyan-400 text-[10px] font-mono">
-                {batchQueue.length}
-              </span>
-            )}
-          </button>
+        <div className="flex flex-col items-end gap-1.5">
+          <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-1 rounded-lg">
+            <button
+              type="button"
+              onClick={() => setActiveMode('single')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors flex items-center gap-1.5 ${
+                activeMode === 'single'
+                  ? 'bg-cyan-400 text-slate-900 shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+              title="Unggah dan audit 1 berkas metadata secara langsung"
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>Audit 1 Berkas</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveMode('batch')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors flex items-center gap-1.5 ${
+                activeMode === 'batch'
+                  ? 'bg-cyan-400 text-slate-900 shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+              title="Unggah dan audit beberapa berkas sampel bertahap"
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>Audit Beberapa Berkas</span>
+              {batchQueue.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-slate-900 text-cyan-400 text-[10px] font-mono">
+                  {batchQueue.length}
+                </span>
+              )}
+            </button>
+          </div>
+          <span className="text-[11px] text-slate-400 hidden sm:block">
+            {activeMode === 'single'
+              ? 'Mode pemeriksaan 1 berkas mendalam'
+              : 'Mode unggah dan audit beberapa berkas'}
+          </span>
         </div>
       </div>
 

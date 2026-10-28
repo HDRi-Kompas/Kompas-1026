@@ -56,81 +56,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       ? (scoredRecords.reduce((acc, r) => acc + (r.latestMqiScore || 0), 0) / scoredRecords.length).toFixed(1)
       : '0.0';
 
-  const benchmarkSamples = [
-    {
-      key: 'iso_batimetri',
-      title: 'Survei Batimetri Multibeam TSS Selat Malaka',
-      type: 'XML (ISO 19139)',
-      profile: 'Batimetri',
-      badgeColor: 'text-cyan-400 border-cyan-800/80 bg-cyan-950/40',
-      description: 'Metadata multibeam echosounder lengkap dengan TVU, THU, koreksi SVP, dan datum pasut LAT.',
-      expected: 'Skor MQI Tinggi (Compliant)',
-    },
-    {
-      key: 'esri_batimetri',
-      title: 'Batimetri Single-Beam Teluk Lampung 1998',
-      type: 'XML (Esri / FGDC)',
-      profile: 'Batimetri',
-      badgeColor: 'text-amber-400 border-amber-800/80 bg-amber-950/40',
-      description: 'Arsip lama analog, tidak memiliki dokumentasi ketidakpastian vertikal modern (TVU/THU).',
-      expected: 'Kualitas Sedang (Legacy Data)',
-    },
-    {
-      key: 'json_kalbar',
-      title: 'Katalog Kawasan Konservasi Kalbar (KKP3K)',
-      type: 'JSON Katalog',
-      profile: 'Kawasan Konservasi',
-      badgeColor: 'text-emerald-400 border-emerald-800/80 bg-emerald-950/40',
-      description: 'Format katalog JSON terstruktur memuat SK penetapan hukum, batas spasial, dan narahubung resmi.',
-      expected: 'Evaluasi Adaptasi KOMPAS',
-    },
-    {
-      key: 'geojson_bengkalis',
-      title: 'Pesisir Mangrove Bengkalis & Meranti, Riau',
-      type: 'GeoJSON Spasial',
-      profile: 'Mangrove',
-      badgeColor: 'text-teal-400 border-teal-800/80 bg-teal-950/40',
-      description: 'Dataset poligon spasial dengan 3 fitur mangrove, verifikasi koordinat WGS 84 dan ring closure.',
-      expected: 'Audit Geometri & Topologi',
-    },
-    {
-      key: 'shp_kotawaringin',
-      title: 'Alur Migrasi Biota Laut Kotawaringin Timur',
-      type: 'Shapefile ZIP (.shp, .shx, .dbf, .prj)',
-      profile: 'Jalur Migrasi Biota Laut',
-      badgeColor: 'text-blue-400 border-blue-800/80 bg-blue-950/40',
-      description: 'Arsip biner ZIP shapefile berisi alur lintasan mamalia laut dan proyeksi geografis .prj.',
-      expected: 'Uji Ekstraksi ZIP & Biner',
-    },
-    {
-      key: 'xml_placeholder',
-      title: 'Survei Terumbu Karang Wakatobi (Draft Placeholder)',
-      type: 'XML (ISO 19139)',
-      profile: 'Terumbu Karang',
-      badgeColor: 'text-rose-400 border-rose-800/80 bg-rose-950/40',
-      description: 'Memuat nilai "Belum Ada", "TBD", tanggal "0000-00-00", dan email placeholder test@example.com.',
-      expected: 'Deteksi Placeholder & Skor Sementara',
-    },
-    {
-      key: 'xml_corrupted',
-      title: 'Metadata Geospasial Rusak (Corrupted Tag)',
-      type: 'XML Rusak',
-      profile: 'Kelautan Umum',
-      badgeColor: 'text-red-400 border-red-800/80 bg-red-950/40',
-      description: 'Sintaks XML tidak tertutup untuk menguji ketahanan parser dan sanitasi sistem.',
-      expected: 'Uji Ketahanan Error (No Crash)',
-    },
-    {
-      key: 'paired_kalbar_bengkalis',
-      title: 'Uji Pasangan: Metadata Kalbar + Spasial Riau',
-      type: 'Pasangan Uji (Paired Audit)',
-      profile: 'Kawasan Konservasi',
-      badgeColor: 'text-purple-400 border-purple-800/80 bg-purple-950/40',
-      description: 'Uji audit konsistensi lintas-berkas antara dokumen metadata dan lapisan spasial geografis.',
-      expected: 'Deteksi Inkonsistensi BBox/Wilayah',
-    },
-  ];
-
   return (
     <div className="space-y-8">
       {/* Hero Strip */}
@@ -260,67 +185,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       )}
 
-      {/* Benchmark Test Datasets (1-Click Run) */}
-      <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-lg font-bold text-white flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-cyan-400" />
-              <span>Berkas Sampel Pengujian Otentik (1-Click Audit)</span>
-            </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Uji langsung kapabilitas parser dan algoritma MQI terhadap dataset kasus riil dari perairan Indonesia.
-            </p>
-          </div>
-          {isLoadingSample && (
-            <div className="text-xs font-mono text-cyan-400 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-              <span>Memproses Sampel...</span>
-            </div>
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {benchmarkSamples.map((sample) => (
-            <div
-              key={sample.key}
-              className="bg-slate-950/70 border border-slate-800 hover:border-slate-700 rounded-lg p-4 flex flex-col justify-between transition-all group"
-            >
-              <div>
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded border ${sample.badgeColor}`}>
-                    {sample.type}
-                  </span>
-                  <span className="text-[11px] text-slate-400 font-medium">
-                    {sample.profile}
-                  </span>
-                </div>
-                <h3 className="font-semibold text-sm text-white group-hover:text-cyan-300 transition-colors line-clamp-2 mb-1.5">
-                  {sample.title}
-                </h3>
-                <p className="text-xs text-slate-400 leading-relaxed mb-3 line-clamp-3">
-                  {sample.description}
-                </p>
-              </div>
-
-              <div className="pt-3 border-t border-slate-800/80">
-                <div className="text-[11px] font-mono text-slate-400 mb-2">
-                  Target: <span className="text-slate-300">{sample.expected}</span>
-                </div>
-                <button
-                  onClick={() => onRunSampleAudit(sample.key)}
-                  disabled={isLoadingSample}
-                  className="w-full py-1.5 px-3 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 active:bg-slate-750 border border-slate-700 rounded-md transition-colors flex items-center justify-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 disabled:opacity-50"
-                >
-                  <span>Jalankan Audit Sampel</span>
-                  <ChevronRight className="w-3.5 h-3.5 text-cyan-400" />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
       {/* Recent Audits List or Empty State */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6">
         <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
@@ -335,7 +199,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               Belum Ada Sesi Audit yang Dijalankan
             </h3>
             <p className="text-xs text-slate-500 max-w-md mx-auto mb-5 leading-relaxed">
-              Silakan pilih salah satu dataset sampel pengujian di atas untuk melihat demonstrasi audit nyata, atau unggah berkas metadata/data spasial Anda sendiri.
+              Silakan unggah berkas metadata atau data spasial kelautan Anda untuk memulai audit kualitas berdasarkan standar SNI ISO 19115 dan Peraturan BIG No. 3 Tahun 2023.
             </p>
             <button
               onClick={onNavigateUpload}
