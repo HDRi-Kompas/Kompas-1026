@@ -116,8 +116,10 @@ export const UploadAuditView: React.FC<UploadAuditViewProps> = ({
     if (ext === 'xml') {
       try {
         const text = await file.text();
-        if (text.includes('gmd:MD_Metadata') || text.includes('MD_Metadata')) {
-          format = 'XML (ISO 19139)';
+        if (text.includes('mdb:MD_Metadata') || text.includes('xmlns:mdb')) {
+          format = 'XML (ISO 19115-3:2021 / mdb)';
+        } else if (text.includes('gmd:MD_Metadata') || text.includes('MD_Metadata')) {
+          format = 'XML (ISO 19139 / gmd)';
         } else if (text.includes('<idinfo>') || text.includes('<metadata')) {
           format = 'XML (Esri/ArcGIS)';
         } else {
@@ -534,7 +536,7 @@ export const UploadAuditView: React.FC<UploadAuditViewProps> = ({
                 {metadataFile ? 'Ganti Dokumen Metadata' : 'Pilih Dokumen Metadata'}
               </label>
               <p className="text-xs text-slate-500 mt-1 max-w-xs">
-                Format didukung: XML (ISO 19139 / SNI ISO 19115), XML Esri, JSON Katalog
+                Format didukung: XML ISO 19115-3 (mdb), ISO 19139 (gmd), XML Esri, JSON Katalog
               </p>
 
               {metadataFile && (
@@ -746,7 +748,7 @@ export const UploadAuditView: React.FC<UploadAuditViewProps> = ({
                 Klik di sini untuk memilih berkas sampel, atau seret & jatuhkan berkas ke area ini
               </label>
               <p className="text-xs text-slate-500 mt-1">
-                Mendukung .xml (ISO 19139 & Esri), .json (Katalog), .geojson, dan Shapefile .zip
+                Mendukung .xml (ISO 19115-3 mdb, ISO 19139 gmd & Esri), .json (Katalog), .geojson, dan Shapefile .zip
               </p>
             </div>
           </div>

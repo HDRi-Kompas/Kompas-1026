@@ -25,11 +25,15 @@ import {
   ShieldCheck,
   Compass,
   Globe2,
+  ArrowRight,
+  Sparkles,
+  BarChart3,
 } from 'lucide-react';
 import { AuditReport, MQICategory, ParameterAuditResult } from '../types/audit';
 import { MQI_CATEGORIES } from '../audit/methodology';
 import { EvidenceModal } from './EvidenceModal';
 import { OpenStreetMapViewer } from './OpenStreetMapViewer';
+import { AuditComparisonBarChart } from './AuditComparisonBarChart';
 import { resolveSpatialFromReport } from '../utils/spatialHelper';
 
 interface AuditResultsViewProps {
@@ -42,7 +46,7 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
   onBackToDashboard,
 }) => {
   const [selectedResult, setSelectedResult] = useState<ParameterAuditResult | null>(null);
-  const [activeTab, setActiveTab] = useState<'parameters' | 'iso19115' | 'categories' | 'map' | 'spatial' | 'consistency'>('parameters');
+  const [activeTab, setActiveTab] = useState<'parameters' | 'extensions' | 'iso19115' | 'categories' | 'map' | 'spatial' | 'consistency'>('parameters');
   const [methodologyView, setMethodologyView] = useState<'adapted' | 'original'>('adapted');
   const spatialData = resolveSpatialFromReport(report);
 
@@ -55,6 +59,17 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
   const [onlyIso19115, setOnlyIso19115] = useState<boolean>(false);
 
   const { scoreReport, parameterResults, consistencyResult, spatialFindings, normalizedSpatialData, iso19115Compliance } = report;
+
+  const handleSelectCategoryFromChart = (category: MQICategory) => {
+    setSelectedCategory(category);
+    setActiveTab('parameters');
+    setTimeout(() => {
+      const el = document.getElementById('parameters-section');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth' });
+      }
+    }, 60);
+  };
 
   // Filter results
   const filteredResults = parameterResults.filter((r) => {
@@ -76,6 +91,8 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
   });
 
   const activeScore = methodologyView === 'adapted' ? scoreReport.adaptedScore : scoreReport.originalScore;
+  const coreScoreDisplay = report.coreScoreMqi !== undefined ? report.coreScoreMqi : activeScore;
+  const readiness = report.iso19115_3Readiness;
 
   // CSV Export handler
   const handleExportCsv = () => {
@@ -189,41 +206,43 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
 
       {/* Score Hero Section */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 lg:p-8">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-          {/* Gauge & Main Score */}
-          <div className="lg:col-span-5 flex flex-col sm:flex-row items-center gap-6 border-b lg:border-b-0 lg:border-r border-slate-800 pb-6 lg:pb-0 lg:pr-8">
+        {/* Dua Angka Skor Utama: Skor Inti MQI & Skor Kesiapan ISO 19115-3 */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-6 border-b border-slate-800">
+          {/* KARTU 1: SKOR INTI MQI (26 Elemen E01–E26) */}
+          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-5 flex flex-col sm:flex-row items-center gap-5 shadow-sm">
+            {/* Circular Gauge for Skor Inti MQI */}
             <div className="relative flex items-center justify-center shrink-0">
-              <svg className="w-36 h-36 transform -rotate-90">
+              <svg className="w-28 h-28 transform -rotate-90">
                 <circle
-                  cx="72"
-                  cy="72"
-                  r="60"
+                  cx="56"
+                  cy="56"
+                  r="46"
                   stroke="currentColor"
-                  strokeWidth="10"
+                  strokeWidth="8"
                   className="text-slate-800"
                   fill="transparent"
                 />
                 <circle
-                  cx="72"
-                  cy="72"
-                  r="60"
+                  cx="56"
+                  cy="56"
+                  r="46"
                   stroke="currentColor"
-                  strokeWidth="10"
-                  strokeDasharray={2 * Math.PI * 60}
+                  strokeWidth="8"
+                  strokeDasharray={2 * Math.PI * 46}
                   strokeDashoffset={
-                    activeScore !== null
-                      ? 2 * Math.PI * 60 * (1 - activeScore / 100)
-                      : 2 * Math.PI * 60
+                    coreScoreDisplay !== null
+                      ? 2 * Math.PI * 46 * (1 - coreScoreDisplay / 100)
+                      : 2 * Math.PI * 46
                   }
                   strokeLinecap="round"
                   className={`transition-all duration-1000 ${
-                    activeScore === null
+                    coreScoreDisplay === null
                       ? 'text-slate-600'
-                      : activeScore >= 85
+                      : coreScoreDisplay >= 85
                       ? 'text-emerald-400'
-                      : activeScore >= 70
+                      : coreScoreDisplay >= 70
                       ? 'text-cyan-400'
-                      : activeScore >= 55
+                      : coreScoreDisplay >= 55
                       ? 'text-amber-400'
                       : 'text-rose-400'
                   }`}
@@ -231,18 +250,21 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
                 />
               </svg>
               <div className="absolute flex flex-col items-center justify-center text-center">
-                <span className="text-3xl font-extrabold font-mono text-white tabular-nums">
-                  {activeScore !== null ? `${activeScore}` : 'N/A'}
+                <span className="text-2xl font-extrabold font-mono text-white tabular-nums">
+                  {coreScoreDisplay !== null ? `${coreScoreDisplay}%` : 'N/A'}
                 </span>
-                <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400">
-                  Skor MQI
+                <span className="text-[9px] uppercase font-mono tracking-wider text-slate-400">
+                  Skor Inti
                 </span>
               </div>
             </div>
 
-            <div className="space-y-2 text-center sm:text-left">
-              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
-                <span className={`text-xs font-semibold px-2.5 py-0.5 rounded border ${
+            <div className="space-y-1.5 text-center sm:text-left flex-1 min-w-0">
+              <div className="flex items-center justify-center sm:justify-start gap-1.5 flex-wrap">
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-800 font-semibold">
+                  List 1 (E01–E26)
+                </span>
+                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${
                   scoreReport.complianceTier === 'Excellent'
                     ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300'
                     : scoreReport.complianceTier === 'Good'
@@ -253,32 +275,26 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
                 }`}>
                   Tingkat: {scoreReport.complianceTier}
                 </span>
-
                 {scoreReport.isProvisional && (
-                  <span className="text-xs font-semibold px-2.5 py-0.5 rounded border border-amber-500/60 bg-amber-950/40 text-amber-300">
-                    Skor Sementara
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded border border-amber-500/60 bg-amber-950/40 text-amber-300">
+                    Sementara
                   </span>
                 )}
               </div>
 
-              <div className="text-xs text-slate-400 leading-relaxed">
-                {scoreReport.isProvisional ? (
-                  <span className="text-amber-300">
-                    Beberapa parameter wajib belum lolos atau perlu ditinjau, skor berstatus sementara.
-                  </span>
-                ) : (
-                  <span>
-                    Seluruh aturan parameter telah dinilai sesuai standar formal MSDI.
-                  </span>
-                )}
-              </div>
+              <h2 className="text-base font-bold text-white tracking-tight">
+                Skor Inti MQI
+              </h2>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Dinilai dari 26 elemen inti metadata geospasial kelautan (E01–E26).
+              </p>
 
               {/* Methodology Switcher */}
-              <div className="pt-2">
-                <div className="inline-flex p-1 bg-slate-950 rounded-lg border border-slate-800 text-xs">
+              <div className="pt-1">
+                <div className="inline-flex p-0.5 bg-slate-900 rounded-lg border border-slate-800 text-[11px]">
                   <button
                     onClick={() => setMethodologyView('adapted')}
-                    className={`px-2.5 py-1 rounded transition-colors ${
+                    className={`px-2 py-0.5 rounded transition-colors ${
                       methodologyView === 'adapted'
                         ? 'bg-slate-800 text-white font-medium shadow-sm'
                         : 'text-slate-400 hover:text-slate-200'
@@ -288,42 +304,132 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
                   </button>
                   <button
                     onClick={() => setMethodologyView('original')}
-                    className={`px-2.5 py-1 rounded transition-colors ${
+                    className={`px-2 py-0.5 rounded transition-colors ${
                       methodologyView === 'original'
                         ? 'bg-slate-800 text-white font-medium shadow-sm'
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    MQI Asli Hasara 2026
+                    MQI Asli Hasara
                   </button>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Formula Transparency & Status Counts */}
-          <div className="lg:col-span-7 space-y-4">
-            <div className="bg-slate-950/70 p-4 rounded-xl border border-slate-800/80 font-mono text-xs">
-              <div className="text-slate-400 mb-1 flex items-center justify-between">
-                <span>Dekomposisi Penghitungan Rumus MQI:</span>
-                <span className="text-cyan-400">MQI = (Σ pᵢwᵢ / Σ wᵢ) × 100</span>
-              </div>
-              <div className="text-slate-200 flex items-center gap-3 pt-1">
-                <span>Pembilang (Σ pᵢwᵢ): <strong className="text-white tabular-nums">{scoreReport.numerator}</strong></span>
-                <span aria-hidden="true">/</span>
-                <span>Penyebut (Σ wᵢ): <strong className="text-white tabular-nums">{scoreReport.denominator}</strong></span>
-                <span aria-hidden="true">=</span>
-                <span className="text-cyan-300 font-bold tabular-nums">
-                  {scoreReport.denominator > 0
-                    ? ((scoreReport.numerator / scoreReport.denominator) * 100).toFixed(2)
-                    : 0}%
+          {/* KARTU 2: SKOR KESIAPAN ISO 19115-3 (6 Elemen Ekstensi E27–E32) */}
+          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-5 flex flex-col sm:flex-row items-center gap-5 shadow-sm">
+            {/* Circular Gauge or N/A */}
+            <div className="relative flex items-center justify-center shrink-0">
+              <svg className="w-28 h-28 transform -rotate-90">
+                <circle
+                  cx="56"
+                  cy="56"
+                  r="46"
+                  stroke="currentColor"
+                  strokeWidth="8"
+                  className="text-slate-800"
+                  fill="transparent"
+                />
+                <circle
+                  cx="56"
+                  cy="56"
+                  r="46"
+                  stroke="currentColor"
+                  strokeWidth="8"
+                  strokeDasharray={2 * Math.PI * 46}
+                  strokeDashoffset={
+                    readiness?.isApplicable && readiness.scorePercentage !== null
+                      ? 2 * Math.PI * 46 * (1 - readiness.scorePercentage / 100)
+                      : 2 * Math.PI * 46
+                  }
+                  strokeLinecap="round"
+                  className={`transition-all duration-1000 ${
+                    !readiness?.isApplicable
+                      ? 'text-slate-700'
+                      : readiness.scorePercentage !== null && readiness.scorePercentage >= 80
+                      ? 'text-emerald-400'
+                      : readiness.scorePercentage !== null && readiness.scorePercentage >= 50
+                      ? 'text-cyan-400'
+                      : 'text-amber-400'
+                  }`}
+                  fill="transparent"
+                />
+              </svg>
+              <div className="absolute flex flex-col items-center justify-center text-center">
+                <span className={`text-2xl font-extrabold font-mono tabular-nums ${
+                  readiness?.isApplicable ? 'text-white' : 'text-slate-400'
+                }`}>
+                  {readiness?.isApplicable && readiness.scorePercentage !== null
+                    ? `${readiness.scorePercentage}%`
+                    : 'N/A'}
                 </span>
-              </div>
-              <div className="text-[11px] text-slate-500 mt-2">
-                *Catatan metodologis: Parameter berstatus "Tidak Berlaku" telah dikeluarkan secara transparan dari penyebut.
+                <span className="text-[9px] uppercase font-mono tracking-wider text-slate-400">
+                  {readiness?.isApplicable ? 'Kesiapan mdb' : 'Format gmd'}
+                </span>
               </div>
             </div>
 
+            <div className="space-y-1.5 text-center sm:text-left flex-1 min-w-0">
+              <div className="flex items-center justify-center sm:justify-start gap-1.5 flex-wrap">
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-950/80 text-blue-300 border border-blue-800 font-semibold">
+                  List 2 (E27–E32)
+                </span>
+                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${
+                  readiness?.isApplicable
+                    ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300'
+                    : 'border-slate-700 bg-slate-900 text-slate-400'
+                }`}>
+                  {readiness?.isApplicable ? 'Root: <mdb:MD_Metadata>' : 'Root: <gmd:MD_Metadata>'}
+                </span>
+              </div>
+
+              <h2 className="text-base font-bold text-white tracking-tight">
+                Skor Kesiapan ISO 19115-3
+              </h2>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                {readiness?.isApplicable
+                  ? `${readiness.totalPointsEarned} dari 6 poin terpenuhi. ${readiness.statusLabel}.`
+                  : 'N/A — Elemen ekstensi E27–E32 hanya dihitung jika berkas berakar <mdb:MD_Metadata>.'}
+              </p>
+
+              <div className="pt-1">
+                <button
+                  onClick={() => setActiveTab('extensions')}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-cyan-400 hover:text-cyan-300 hover:underline"
+                >
+                  <span>Lihat Rincian 6 Elemen Ekstensi</span>
+                  <ArrowRight className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Formula Transparency & Status Counts */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center pt-6">
+          <div className="lg:col-span-6 bg-slate-950/70 p-4 rounded-xl border border-slate-800/80 font-mono text-xs">
+            <div className="text-slate-400 mb-1 flex items-center justify-between">
+              <span>Dekomposisi Penghitungan Rumus MQI:</span>
+              <span className="text-cyan-400">MQI = (Σ pᵢwᵢ / Σ wᵢ) × 100</span>
+            </div>
+            <div className="text-slate-200 flex items-center gap-3 pt-1">
+              <span>Pembilang (Σ pᵢwᵢ): <strong className="text-white tabular-nums">{scoreReport.numerator}</strong></span>
+              <span aria-hidden="true">/</span>
+              <span>Penyebut (Σ wᵢ): <strong className="text-white tabular-nums">{scoreReport.denominator}</strong></span>
+              <span aria-hidden="true">=</span>
+              <span className="text-cyan-300 font-bold tabular-nums">
+                {scoreReport.denominator > 0
+                  ? ((scoreReport.numerator / scoreReport.denominator) * 100).toFixed(2)
+                  : 0}%
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-500 mt-2">
+              *Catatan metodologis: Parameter berstatus "Tidak Berlaku" telah dikeluarkan secara transparan dari penyebut.
+            </div>
+          </div>
+
+          <div className="lg:col-span-6">
             {/* Status Counts Matrix */}
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
               <div className="bg-slate-950/60 p-2.5 rounded-lg border border-emerald-900/40">
@@ -377,6 +483,12 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Comparative Bar Chart Section (Diagram Batang Perbandingan Kualitas Metadata) */}
+      <AuditComparisonBarChart
+        report={report}
+        onSelectCategory={handleSelectCategoryFromChart}
+      />
 
       {/* ISO 19115 Core Metadata Compliance Banner Card */}
       {iso19115Compliance && (
@@ -560,7 +672,7 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
         </div>
       )}
 
-      {/* Navigation Tabs (Parameters, ISO 19115, 8 Categories, Spatial Diagnostics, Consistency) */}
+      {/* Navigation Tabs (Parameters E01-E26, Extensions E27-E32, ISO 19115, 8 Categories, Spatial Diagnostics, Consistency) */}
       <div className="flex items-center gap-1 border-b border-slate-800 overflow-x-auto">
         <button
           onClick={() => setActiveTab('parameters')}
@@ -570,7 +682,29 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
-          Daftar Parameter ({filteredResults.length})
+          Elemen Inti E01–E26 ({report.coreElementsResults?.length || 26})
+        </button>
+        <button
+          onClick={() => setActiveTab('extensions')}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 whitespace-nowrap ${
+            activeTab === 'extensions'
+              ? 'border-cyan-400 text-cyan-400'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Sparkles className="w-4 h-4 text-cyan-400" />
+          <span>Ekstensi ISO 19115-3 (E27–E32)</span>
+          <span
+            className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
+              readiness?.isApplicable
+                ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800'
+                : 'bg-slate-800 text-slate-400 border-slate-700'
+            }`}
+          >
+            {readiness?.isApplicable && readiness.scorePercentage !== null
+              ? `${readiness.scorePercentage}%`
+              : 'N/A'}
+          </span>
         </button>
         {iso19115Compliance && (
           <button
@@ -587,13 +721,14 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
         )}
         <button
           onClick={() => setActiveTab('categories')}
-          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
             activeTab === 'categories'
               ? 'border-cyan-400 text-cyan-400'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
-          Evaluasi 8 Kategori MQI
+          <BarChart3 className="w-4 h-4" />
+          <span>Diagram & 8 Kategori MQI</span>
         </button>
         <button
           onClick={() => setActiveTab('map')}
@@ -639,7 +774,7 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
 
       {/* TAB 1: PARAMETER AUDIT FINDINGS TABLE */}
       {activeTab === 'parameters' && (
-        <div className="space-y-4">
+        <div id="parameters-section" className="space-y-4">
           {/* Filters Bar */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row gap-3 items-center justify-between">
             <div className="relative w-full md:w-80">
@@ -740,8 +875,15 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
                           onClick={() => setSelectedResult(result)}
                           className="hover:bg-slate-800/50 transition-colors cursor-pointer group"
                         >
-                          <td className="py-3.5 px-4 font-mono text-xs text-cyan-400 font-semibold whitespace-nowrap">
-                            {result.ruleId}
+                          <td className="py-3.5 px-4 font-mono text-xs whitespace-nowrap">
+                            <div className="flex items-center gap-1.5">
+                              {result.elementId && (
+                                <span className="px-1.5 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800 text-[10px] font-semibold">
+                                  {result.elementId}
+                                </span>
+                              )}
+                              <span className="text-cyan-400 font-semibold">{result.ruleId}</span>
+                            </div>
                           </td>
                           <td className="py-3.5 px-4 font-medium text-white max-w-sm">
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -824,6 +966,169 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
                 </tbody>
               </table>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB: ELEMEN EKSTENSI ISO 19115-3 (E27–E32) */}
+      {activeTab === 'extensions' && (
+        <div className="space-y-6">
+          {/* Header Card */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+              <div>
+                <div className="flex items-center gap-2 text-xs font-mono text-cyan-400 uppercase tracking-wide flex-wrap">
+                  <Sparkles className="w-4 h-4 text-cyan-400" />
+                  <span>B. Elemen Ekstensi (E27–E32) — Hanya untuk Format mdb</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="px-2 py-0.5 rounded bg-slate-950 text-slate-300 border border-slate-800 font-semibold">
+                    SNI ISO 19115-3:2021
+                  </span>
+                </div>
+                <h2 className="text-xl font-bold text-white mt-1">
+                  Kesiapan Skema Mutakhir ISO 19115-3 (List 2 Ekstensi)
+                </h2>
+                <p className="text-xs text-slate-300 leading-relaxed mt-1 max-w-3xl">
+                  Elemen-elemen ini ditambahkan karena format ISO 19115-3 (<code className="text-cyan-300">mdb</code>) memiliki struktur yang lebih kaya dibandingkan format lama (<code className="text-slate-400">gmd</code>). Sesuai aturan evaluasi: jika dokumen berakar <code className="text-cyan-300">&lt;mdb:MD_Metadata&gt;</code>, elemen dinilai aktif. Jika berakar <code className="text-amber-300">&lt;gmd:MD_Metadata&gt;</code>, status seluruh elemen ekstensi adalah <strong>N/A</strong>.
+                </p>
+              </div>
+
+              {/* Status & Score Pill */}
+              <div className="flex sm:flex-col items-center sm:items-end justify-between gap-2 shrink-0 bg-slate-950/80 p-3 rounded-xl border border-slate-800">
+                <div className="text-left sm:text-right">
+                  <div className="text-xs font-mono text-slate-400">Skor Kesiapan ISO 19115-3</div>
+                  <div className="text-2xl font-extrabold font-mono text-white tabular-nums">
+                    {readiness?.isApplicable && readiness.scorePercentage !== null
+                      ? `${readiness.scorePercentage}%`
+                      : 'N/A'}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span
+                    className={`text-[10px] font-semibold px-2.5 py-0.5 rounded border ${
+                      readiness?.isApplicable
+                        ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300'
+                        : 'border-slate-700 bg-slate-900 text-slate-400'
+                    }`}
+                  >
+                    {readiness?.statusLabel || 'N/A'}
+                  </span>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300">
+                    {readiness?.isApplicable ? `${readiness.totalPointsEarned} / 6 Poin` : 'Root: gmd (N/A)'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Informative Banner when NOT mdb */}
+            {!readiness?.isApplicable && (
+              <div className="bg-amber-950/30 border border-amber-800/60 rounded-xl p-4 flex items-start gap-3 text-xs text-slate-300">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <div className="font-semibold text-amber-300">
+                    Format Dokumen: &lt;gmd:MD_Metadata&gt; (ISO 19139 Legacy)
+                  </div>
+                  <p className="leading-relaxed text-slate-300">
+                    Berdasarkan instruksi metodologis, elemen E27–E32 berstatus <strong>N/A</strong> karena skema XML dokumen ini masih menggunakan namespace lama (<code className="text-amber-200">gmd</code>). Untuk mendapatkan skor pada elemen ekstensi ini, berkas metadata harus dikonversi ke skema modern <code className="text-cyan-300">&lt;mdb:MD_Metadata&gt;</code> (ISO 19115-3:2021).
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 6 Elements Grid Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {(readiness?.elements || []).map((el) => {
+              const isFull = el.scoreValue === 1;
+              const isHalf = el.scoreValue === 0.5;
+              const isZero = el.scoreValue === 0 && el.isApplicable;
+              const isNA = !el.isApplicable;
+
+              return (
+                <div
+                  key={el.elementId}
+                  className="bg-slate-900/90 border border-slate-800 rounded-xl p-5 space-y-3 flex flex-col justify-between"
+                >
+                  <div className="space-y-2">
+                    {/* Top Row: ID, Category & Score */}
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <span className="px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800 text-xs font-mono font-bold">
+                          {el.elementId}
+                        </span>
+                        <span className="text-[11px] font-mono text-slate-400">
+                          {el.categoryName}
+                        </span>
+                      </div>
+                      <span
+                        className={`text-xs font-mono font-semibold px-2 py-0.5 rounded border ${
+                          isNA
+                            ? 'bg-slate-950 border-slate-800 text-slate-400'
+                            : isFull
+                            ? 'bg-emerald-950/80 border-emerald-700 text-emerald-300'
+                            : isHalf
+                            ? 'bg-amber-950/80 border-amber-700 text-amber-300'
+                            : 'bg-rose-950/80 border-rose-800 text-rose-300'
+                        }`}
+                      >
+                        {isNA ? 'N/A (Bukan mdb)' : `${el.scoreValue.toFixed(1)} / 1.0 Poin`}
+                      </span>
+                    </div>
+
+                    {/* Element Name */}
+                    <h3 className="text-sm font-bold text-white tracking-tight">
+                      {el.name}
+                    </h3>
+
+                    {/* MDB Path */}
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <span className="text-slate-500 font-mono text-[11px]">Jalur mdb:</span>
+                      <code className="text-cyan-300 font-mono text-[11px] bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                        {el.mdbPath}
+                      </code>
+                    </div>
+
+                    {/* Description */}
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      {el.description}
+                    </p>
+
+                    {/* Rule Condition Summary */}
+                    <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/80 text-[11px] font-mono text-slate-300 space-y-1">
+                      <div className="text-cyan-400 font-semibold flex items-center gap-1">
+                        <Info className="w-3 h-3" />
+                        <span>Aturan Penilaian:</span>
+                      </div>
+                      <div className="text-slate-400 leading-relaxed">
+                        {el.ruleConditionSummary}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Evidence & Findings Footer */}
+                  <div className="pt-2 border-t border-slate-800/80 space-y-1.5 text-xs">
+                    <div className="flex items-start gap-1.5">
+                      <span className="text-slate-500 shrink-0 font-mono text-[11px]">Nilai:</span>
+                      <span className="text-slate-200 font-mono text-[11px] break-all">
+                        {el.valueFoundText}
+                      </span>
+                    </div>
+
+                    {el.findingMessage && (
+                      <div className="text-[11px] text-amber-300/90 leading-relaxed">
+                        {el.findingMessage}
+                      </div>
+                    )}
+
+                    {el.recommendation && (
+                      <div className="text-[11px] text-cyan-400/80 leading-relaxed">
+                        <strong className="text-cyan-300">Rekomendasi:</strong> {el.recommendation}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -971,52 +1276,75 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
         </div>
       )}
 
-      {/* TAB 2: 8 CATEGORIES BREAKDOWN */}
+      {/* TAB 2: 8 CATEGORIES & COMPARATIVE CHARTS */}
       {activeTab === 'categories' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {scoreReport.categorySummaries.map((cat) => {
-            const catMeta = MQI_CATEGORIES[cat.category];
-            return (
-              <div
-                key={cat.category}
-                className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3"
-              >
-                <div className="flex items-center justify-between">
-                  <h3 className="font-bold text-white text-sm">
-                    {cat.categoryName}
-                  </h3>
-                  <span className="text-sm font-bold font-mono text-cyan-400 tabular-nums">
-                    {cat.percentage}%
-                  </span>
-                </div>
+        <div className="space-y-6">
+          <AuditComparisonBarChart
+            report={report}
+            onSelectCategory={handleSelectCategoryFromChart}
+          />
 
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  {catMeta?.description}
-                </p>
+          <div className="pt-2 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Layers className="w-4 h-4 text-cyan-400" />
+                <span>Rincian Matriks 8 Kategori Metadata MQI</span>
+              </h3>
+              <span className="text-[11px] font-mono text-slate-400">
+                Klik kartu kategori untuk menyaring parameter
+              </span>
+            </div>
 
-                {/* Progress bar */}
-                <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {scoreReport.categorySummaries.map((cat) => {
+                const catMeta = MQI_CATEGORIES[cat.category];
+                return (
                   <div
-                    className={`h-full transition-all duration-700 ${
-                      cat.percentage >= 80
-                        ? 'bg-emerald-400'
-                        : cat.percentage >= 50
-                        ? 'bg-cyan-400'
-                        : cat.percentage >= 25
-                        ? 'bg-amber-400'
-                        : 'bg-rose-500'
-                    }`}
-                    style={{ width: `${cat.percentage}%` }}
-                  />
-                </div>
+                    key={cat.category}
+                    onClick={() => handleSelectCategoryFromChart(cat.category)}
+                    className="bg-slate-900 border border-slate-800 hover:border-cyan-500/60 rounded-xl p-5 space-y-3 cursor-pointer transition-all hover:bg-slate-900/90 group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-cyan-400" />
+                        <h4 className="font-bold text-white text-sm group-hover:text-cyan-300 transition-colors">
+                          {cat.categoryName}
+                        </h4>
+                      </div>
+                      <span className="text-sm font-bold font-mono text-cyan-400 tabular-nums">
+                        {cat.percentage}%
+                      </span>
+                    </div>
 
-                <div className="flex items-center justify-between text-xs text-slate-500 font-mono pt-1">
-                  <span>Parameter Terpenuhi: {cat.fulfilledParameters} / {cat.applicableParameters}</span>
-                  <span>Bobot: {cat.scoreEarned} / {cat.scoreMaxPossible}</span>
-                </div>
-              </div>
-            );
-          })}
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      {catMeta?.description}
+                    </p>
+
+                    {/* Progress bar */}
+                    <div className="w-full bg-slate-950 h-2.5 rounded-full overflow-hidden border border-slate-800">
+                      <div
+                        className={`h-full transition-all duration-700 ${
+                          cat.percentage >= 80
+                            ? 'bg-emerald-400'
+                            : cat.percentage >= 50
+                            ? 'bg-cyan-400'
+                            : cat.percentage >= 25
+                            ? 'bg-amber-400'
+                            : 'bg-rose-500'
+                        }`}
+                        style={{ width: `${cat.percentage}%` }}
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs text-slate-500 font-mono pt-1">
+                      <span>Parameter: {cat.fulfilledParameters} / {cat.applicableParameters} terpenuhi</span>
+                      <span>Bobot: {cat.scoreEarned} / {cat.scoreMaxPossible}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 

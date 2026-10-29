@@ -69,6 +69,7 @@ export interface ISO19115ComplianceReport {
 
 export interface AuditRule {
   id: string;
+  elementId?: string; // E01 to E26
   name: string;
   definition: string;
   category: MQICategory;
@@ -96,6 +97,7 @@ export interface EvaluationOutcome {
 
 export interface ParameterAuditResult {
   ruleId: string;
+  elementId?: string; // E01 to E26
   name: string;
   category: MQICategory;
   importance: AuditImportance;
@@ -153,8 +155,38 @@ export interface ConsistencyAuditResult {
   recommendations: string[];
 }
 
+export interface ExtensionElementResult {
+  elementId: 'E27' | 'E28' | 'E29' | 'E30' | 'E31' | 'E32';
+  name: string;
+  category: MQICategory;
+  categoryName: string;
+  mdbPath: string;
+  description: string;
+  scoreValue: number; // 0, 0.5, or 1
+  maxScore: number;   // 1
+  status: 'terpenuhi' | 'sebagian' | 'tidak_terpenuhi' | 'tidak_berlaku';
+  isApplicable: boolean; // false if gmd:MD_Metadata, true if mdb:MD_Metadata
+  ruleConditionSummary: string;
+  valueFoundText: string;
+  evidenceSnippet?: string;
+  findingMessage?: string;
+  recommendation?: string;
+}
+
+export interface Iso19115_3ReadinessReport {
+  isApplicable: boolean; // true if mdb:MD_Metadata, false if gmd:MD_Metadata
+  rootElementDetected: 'mdb:MD_Metadata' | 'gmd:MD_Metadata' | 'other';
+  scorePercentage: number | null; // e.g. 83.3 or null if N/A
+  totalPointsEarned: number | null; // sum of 0, 0.5, 1 across 6 elements
+  maxPoints: number; // 6
+  statusLabel: string; // 'Sangat Siap' | 'Sebagian Siap' | 'Perlu Pemenuhan' | 'N/A (Format gmd)'
+  elements: ExtensionElementResult[]; // List 2 (E27–E32)
+}
+
 export interface NormalizedMetadata {
-  rawFormat: 'xml_iso19139' | 'xml_esri' | 'json_catalog' | 'unknown';
+  rawFormat: 'xml_iso19139' | 'xml_iso19115_3' | 'xml_esri' | 'json_catalog' | 'unknown';
+  xmlRootElement?: 'mdb:MD_Metadata' | 'gmd:MD_Metadata' | 'esri_metadata' | 'other';
+  isMdbFormat?: boolean;
   fileName: string;
   fileSizeBytes: number;
   parsedAt: string;
@@ -287,6 +319,11 @@ export interface AuditReport {
   scoreReport: MQIScoreReport;
   iso19115Compliance: ISO19115ComplianceReport;
   parameterResults: ParameterAuditResult[];
+  coreElementsResults?: ParameterAuditResult[]; // List 1: Skor Inti MQI (E01-E26)
+  coreScoreMqi?: number; // Skor Inti MQI dari 26 elemen
+  extensionElementsResults?: ExtensionElementResult[]; // List 2: Skor Ekstensi ISO 19115-3 (E27-E32)
+  extensionScorePercentage?: number | null; // Persentase skor ekstensi (0-100) atau null jika N/A
+  iso19115_3Readiness?: Iso19115_3ReadinessReport; // Laporan Kesiapan ISO 19115-3
   consistencyResult?: ConsistencyAuditResult;
   bigNo3Compliance?: import('./inventory').BIGNo3ComplianceReport;
   spatialFindings?: {

@@ -7,6 +7,7 @@
 import { AUDIT_RULE_REGISTRY } from './registry';
 import { METHODOLOGY_METADATA, MQI_CATEGORIES, ISO19115_CORE_ELEMENTS } from './methodology';
 import { auditConsistency } from './consistency';
+import { evaluateIso19115_3Extensions } from './extensions';
 import {
   AuditReport,
   CategorySummary,
@@ -32,17 +33,18 @@ export function runDatasetAudit(
   const parameterResults: ParameterAuditResult[] = [];
   const provisionalReasons: string[] = [];
 
-  // Filter applicable rules for this profile
-  const applicableRules = AUDIT_RULE_REGISTRY.filter(rule => {
-    if (rule.applicableProfiles === 'all') return true;
-    return rule.applicableProfiles.includes(profileId);
-  });
-
-  // Evaluate each rule
-  for (const rule of applicableRules) {
+  // Evaluate all rules in registry (26 core rules E01-E26)
+  for (const rule of AUDIT_RULE_REGISTRY) {
+    const isProfileApplicable = rule.applicableProfiles === 'all' || rule.applicableProfiles.includes(profileId);
     let outcome: ReturnType<typeof rule.evaluate>;
 
-    if (!metadata) {
+    if (!isProfileApplicable) {
+      outcome = {
+        status: 'tidak_berlaku',
+        valueFound: null,
+        findingMessage: `Parameter tidak berlaku untuk profil data "${profileId}".`,
+      };
+    } else if (!metadata) {
       outcome = {
         status: 'belum_diperiksa',
         valueFound: null,
@@ -61,10 +63,10 @@ export function runDatasetAudit(
     }
 
     const isMandatory = rule.isMandatoryInProfile(profileId);
-    if (isMandatory && (outcome.status === 'tidak_terpenuhi' || outcome.status === 'tidak_valid')) {
+    if (isProfileApplicable && isMandatory && (outcome.status === 'tidak_terpenuhi' || outcome.status === 'tidak_valid')) {
       provisionalReasons.push(`Parameter wajib "${rule.name}" (${rule.id}) berstatus ${outcome.status}.`);
     }
-    if (outcome.status === 'perlu_ditinjau') {
+    if (isProfileApplicable && outcome.status === 'perlu_ditinjau') {
       provisionalReasons.push(`Parameter "${rule.name}" (${rule.id}) memerlukan peninjauan manual pakar.`);
     }
 
@@ -72,6 +74,7 @@ export function runDatasetAudit(
 
     parameterResults.push({
       ruleId: rule.id,
+      elementId: rule.elementId,
       name: rule.name,
       category: rule.category,
       importance: rule.importance,
@@ -279,13 +282,27 @@ export function runDatasetAudit(
     standardReference: 'ISO 19115-1:2014 & SNI ISO 19115:2012 (BSN/BIG)',
   };
 
+  // List 1: Skor Inti MQI (E01–E26)
+  const coreElementsResults = parameterResults.filter(r => r.elementId && /^E(0[1-9]|1[0-9]|2[0-6])$/.test(r.elementId));
+  const coreApplicable = coreElementsResults.filter(r => r.status !== 'tidak_berlaku');
+  const coreFulfilled = coreApplicable.filter(r => r.status === 'terpenuhi');
+  const coreScoreMqi = coreApplicable.length > 0
+    ? Math.round((coreFulfilled.length / coreApplicable.length) * 1000) / 10
+    : (adaptedScore ?? (originalScore ?? 0));
+
+  // List 2: Skor Ekstensi ISO 19115-3 (E27–E32) - Deteksi root element mdb vs gmd
+  const iso19115_3Readiness = evaluateIso19115_3Extensions(metadata);
+  const extensionElementsResults = iso19115_3Readiness.elements;
+  const extensionScorePercentage = iso19115_3Readiness.scorePercentage;
+
   // Evaluate Peraturan Badan Informasi Geospasial (BIG) No. 3 Tahun 2023
   // tentang Pemberlakuan Standar Nasional Indonesia Metadata Geospasial Secara Wajib
   const lineageParam = parameterResults.find(p => p.ruleId === 'PROC-01' || p.ruleId === 'PROC-02');
   const hasLineage = lineageParam ? lineageParam.status === 'terpenuhi' : false;
 
   const rawFormat = metadata?.rawFormat || 'unknown';
-  const isIso19139 = rawFormat === 'xml_iso19139';
+  const isMdb = metadata?.xmlRootElement === 'mdb:MD_Metadata' || metadata?.isMdbFormat === true || rawFormat === 'xml_iso19115_3';
+  const isIso19139 = rawFormat === 'xml_iso19139' || metadata?.xmlRootElement === 'gmd:MD_Metadata';
   const isEsri = rawFormat === 'xml_esri';
   const isJson = rawFormat === 'json_catalog';
 
@@ -294,7 +311,17 @@ export function runDatasetAudit(
   let bigStatusLabel = '';
   let bigNotes = '';
 
-  if (isIso19139) {
+  if (isMdb) {
+    bigStandardCategory = 'SNI ISO 19115-3:2021';
+    isWithinTransitionPeriod = false;
+    if (isCompliant && hasLineage) {
+      bigStatusLabel = 'Sesuai Standar Resmi Utama (SNI ISO 19115-3:2021)';
+      bigNotes = 'Metadata menggunakan skema XML modern SNI ISO 19115-3:2021 (<mdb:MD_Metadata>) sesuai mandat penuh Peraturan BIG No. 3/2023.';
+    } else {
+      bigStatusLabel = 'Skema Modern (mdb) - Perlu Pemenuhan Elemen Inti';
+      bigNotes = 'Format berkas telah menggunakan ISO 19115-3 (<mdb:MD_Metadata>), namun belum memenuhi seluruh elemen inti atau riwayat pemrosesan data (Lineage).';
+    }
+  } else if (isIso19139) {
     bigStandardCategory = 'SNI ISO 19115:2012 (Transisi)';
     isWithinTransitionPeriod = true;
     if (isCompliant && hasLineage) {
@@ -333,8 +360,12 @@ export function runDatasetAudit(
       code: 'BIG-P2-C',
       title: 'Skema Implementasi XML Standar (SNI ISO 19115-3 / ISO 19139)',
       legalBasis: 'Pasal 2 ayat (1) huruf c & Pasal 6',
-      status: (isIso19139 ? 'terpenuhi' : 'tidak_valid') as import('../types/audit').AuditStatus,
-      details: isIso19139 ? 'Menggunakan skema XML SNI ISO/TS 19139:2012 (Dalam masa transisi penyesuaian menuju SNI ISO 19115-3).' : 'Berkas tidak menggunakan skema XML SNI resmi.',
+      status: (isMdb || isIso19139 ? 'terpenuhi' : 'tidak_valid') as import('../types/audit').AuditStatus,
+      details: isMdb
+        ? 'Menggunakan skema XML resmi mutakhir SNI ISO 19115-3:2021 (<mdb:MD_Metadata>).'
+        : isIso19139
+        ? 'Menggunakan skema XML SNI ISO/TS 19139:2012 (Dalam masa transisi penyesuaian menuju SNI ISO 19115-3).'
+        : 'Berkas tidak menggunakan skema XML SNI resmi.',
     },
     {
       code: 'BIG-P3-1',
@@ -345,7 +376,7 @@ export function runDatasetAudit(
     },
   ];
 
-  const bigIsCompliant = isCompliant && hasLineage && (isIso19139 || (bigStandardCategory as string) === 'SNI ISO 19115-3:2021');
+  const bigIsCompliant = isCompliant && hasLineage && (isIso19139 || isMdb || (bigStandardCategory as string) === 'SNI ISO 19115-3:2021');
 
   const bigNo3Compliance: import('../types/inventory').BIGNo3ComplianceReport = {
     isCompliant: bigIsCompliant,
@@ -371,6 +402,11 @@ export function runDatasetAudit(
     iso19115Compliance,
     bigNo3Compliance,
     parameterResults,
+    coreElementsResults,
+    coreScoreMqi,
+    extensionElementsResults,
+    extensionScorePercentage,
+    iso19115_3Readiness,
     consistencyResult,
     spatialFindings,
   };

@@ -444,6 +444,41 @@ export const AUDIT_RULE_REGISTRY: AuditRule[] = [
     },
   },
   {
+    id: 'EXT-03',
+    elementId: 'E11',
+    name: 'Cakupan Temporal Survei (Temporal Extent)',
+    definition: 'Rentang waktu survei atau tanggal publikasi/pembaruan dataset spasial kelautan.',
+    category: 'CAT_EXTENT',
+    importance: 'important',
+    weight: 2,
+    source: 'jurnal_hasara_2026',
+    expectedFormat: 'Format ISO 8601 (YYYY-MM-DD / rentang tanggal survei)',
+    targetFields: ['temporalExtent.startDate', 'temporalExtent.endDate', 'temporalExtent.publicationDate'],
+    applicableProfiles: 'all',
+    iso19115Tag: 'EX_TemporalExtent.extent',
+    isIso19115Core: true,
+    isMandatoryInProfile: () => true,
+    evaluate: (metadata): EvaluationOutcome => {
+      const start = metadata.temporalExtent?.startDate;
+      const end = metadata.temporalExtent?.endDate;
+      const pub = metadata.temporalExtent?.publicationDate;
+      const dateVal = (start && end) ? `${start} s/d ${end}` : (start || end || pub || metadata.metaMetadata?.metadataDate);
+      if (!dateVal) {
+        return {
+          status: 'tidak_terpenuhi',
+          valueFound: null,
+          findingMessage: 'Cakupan temporal survei (EX_TemporalExtent) atau tanggal referensi data tidak ditemukan.',
+          recommendation: 'Sertakan tanggal mulai dan selesai survei (atau tanggal terbit) dalam format ISO 8601 (YYYY-MM-DD).',
+        };
+      }
+      return {
+        status: 'terpenuhi',
+        valueFound: dateVal,
+        evidenceSnippet: `Temporal: "${dateVal}"`,
+      };
+    },
+  },
+  {
     id: 'EXT-04',
     name: 'Datum Vertikal / Surutan Pasut (Vertical Sounding Datum)',
     definition: 'Datum vertikal acuan pengukuran kedalaman/ketinggian laut (LAT, MSL, Chart Datum, atau EGM2008).',
@@ -993,3 +1028,11 @@ export const AUDIT_RULE_REGISTRY: AuditRule[] = [
     },
   },
 ];
+
+// Automatically map E01 - E26 for the 26 Core Elements (List 1: Skor Inti MQI)
+AUDIT_RULE_REGISTRY.forEach((r, idx) => {
+  if (!r.elementId) {
+    r.elementId = `E${String(idx + 1).padStart(2, '0')}`;
+  }
+});
+

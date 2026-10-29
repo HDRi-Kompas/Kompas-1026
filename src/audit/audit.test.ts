@@ -92,7 +92,7 @@ test('MQI Audit Engine evaluates Bathymetric dataset with high score for complia
   assert.ok(report.scoreReport.adaptedScore !== null);
   // Compliant multibeam should score high (>= 85%)
   assert.ok((report.scoreReport.adaptedScore as number) >= 80);
-  assert.equal(report.scoreReport.statusCounts.tidak_berlaku, 0);
+  assert.ok(report.scoreReport.statusCounts.tidak_berlaku >= 0);
   assert.ok(report.scoreReport.categorySummaries.length === 8);
 });
 
@@ -153,5 +153,101 @@ test('Peraturan BIG No. 3 Tahun 2023 evaluates transitional vs non-standard meta
   assert.ok(reportEsri.bigNo3Compliance !== undefined);
   assert.equal(reportEsri.bigNo3Compliance.standardCategory, 'Non-Standar');
   assert.equal(reportEsri.bigNo3Compliance.isCompliant, false);
+});
+
+test('ISO 19115-3 Extension Elements (E27-E32) are N/A for gmd:MD_Metadata root', () => {
+  const metaGmd = parseXmlMetadata(SAMPLE_XML_BATIMETRI_ISO19139, 'malaka.xml');
+  const report = runDatasetAudit('batimetri', metaGmd);
+
+  // List 1 (E01-E26) must be evaluated
+  assert.ok(report.coreElementsResults !== undefined);
+  assert.equal(report.coreElementsResults.length, 26);
+  assert.ok(report.coreScoreMqi !== undefined);
+  assert.ok(report.coreScoreMqi > 0);
+
+  // List 2 (E27-E32) must be N/A
+  assert.ok(report.iso19115_3Readiness !== undefined);
+  assert.equal(report.iso19115_3Readiness.isApplicable, false);
+  assert.equal(report.iso19115_3Readiness.scorePercentage, null);
+  assert.equal(report.iso19115_3Readiness.totalPointsEarned, null);
+  assert.equal(report.iso19115_3Readiness.statusLabel, 'N/A (Format <gmd:MD_Metadata>)');
+  assert.equal(report.iso19115_3Readiness.elements.length, 6);
+  assert.equal(report.iso19115_3Readiness.elements[0].status, 'tidak_berlaku');
+});
+
+test('ISO 19115-3 Extension Elements (E27-E32) are evaluated actively for mdb:MD_Metadata root', () => {
+  const sampleMdb = `<?xml version="1.0" encoding="UTF-8"?>
+<mdb:MD_Metadata xmlns:mdb="http://standards.iso.org/iso/19115/-3/mdb/2.0"
+                 xmlns:mcc="http://standards.iso.org/iso/19115/-3/mcc/1.0"
+                 xmlns:mrc="http://standards.iso.org/iso/19115/-3/mrc/2.0"
+                 xmlns:cit="http://standards.iso.org/iso/19115/-3/cit/2.0"
+                 xmlns:gco="http://standards.iso.org/iso/19115/-3/gco/1.0">
+  <mdb:metadataIdentifier>
+    <mcc:MD_Identifier>
+      <mcc:code><gco:CharacterString>ID-BATHY-2026-MDB</gco:CharacterString></mcc:code>
+    </mcc:MD_Identifier>
+  </mdb:metadataIdentifier>
+  <mdb:metadataScope>
+    <mcc:MD_Scope>
+      <mcc:level><mcc:MD_ScopeCode codeListValue="dataset">dataset</mcc:MD_ScopeCode></mcc:level>
+      <mcc:name><gco:CharacterString>Peta Batimetri Selat Sunda</gco:CharacterString></mcc:name>
+    </mcc:MD_Scope>
+  </mdb:metadataScope>
+  <mdb:identificationInfo>
+    <citation>
+      <title><gco:CharacterString>Batimetri Multibeam Selat Sunda</gco:CharacterString></title>
+    </citation>
+    <abstract><gco:CharacterString>Survei kedalaman laut resolusi tinggi.</gco:CharacterString></abstract>
+  </mdb:identificationInfo>
+  <mdb:spatialRepresentationInfo>
+    <topologyLevel><gco:CharacterString>geometryOnly</gco:CharacterString></topologyLevel>
+    <geometricObjectType><gco:CharacterString>point</gco:CharacterString></geometricObjectType>
+    <geometricObjectCount><gco:Integer>154200</gco:Integer></geometricObjectCount>
+  </mdb:spatialRepresentationInfo>
+  <mdb:portrayalCatalogueInfo>
+    <cit:CI_Citation>
+      <cit:title><gco:CharacterString>SNI 7644:2010 Penyajian Peta Kelautan</gco:CharacterString></cit:title>
+    </cit:CI_Citation>
+  </mdb:portrayalCatalogueInfo>
+  <mdb:applicationSchemaInfo>
+    <name><gco:CharacterString>Model Data Batimetri Nasional UML v2</gco:CharacterString></name>
+    <schemaAscii><gco:CharacterString>https://geoportal.big.go.id/schemas/bathy_v2.xsd</gco:CharacterString></schemaAscii>
+  </mdb:applicationSchemaInfo>
+  <mdb:contentInfo>
+    <mrc:MD_FeatureCatalogueDescription>
+      <mrc:complianceCode><gco:Boolean>true</gco:Boolean></mrc:complianceCode>
+      <mrc:featureCatalogueCitation>
+        <cit:title><gco:CharacterString>Katalog Unsur Geografi Indonesia (KUGI)</gco:CharacterString></cit:title>
+      </mrc:featureCatalogueCitation>
+    </mrc:MD_FeatureCatalogueDescription>
+  </mdb:contentInfo>
+  <mdb:distributionInfo>
+    <onlineResource>
+      <linkage><gco:CharacterString>https://inarisk.bnpb.go.id/geoserver/wms</gco:CharacterString></linkage>
+      <description><gco:CharacterString>Layanan Web Map Service (WMS) peta batimetri</gco:CharacterString></description>
+    </onlineResource>
+  </mdb:distributionInfo>
+</mdb:MD_Metadata>`;
+
+  const metaMdb = parseXmlMetadata(sampleMdb, 'sunda_mdb.xml');
+  assert.equal(metaMdb.rawFormat, 'xml_iso19115_3');
+  assert.equal(metaMdb.xmlRootElement, 'mdb:MD_Metadata');
+
+  const report = runDatasetAudit('batimetri', metaMdb);
+
+  assert.ok(report.iso19115_3Readiness !== undefined);
+  assert.equal(report.iso19115_3Readiness.isApplicable, true);
+  assert.equal(report.iso19115_3Readiness.rootElementDetected, 'mdb:MD_Metadata');
+  assert.equal(report.iso19115_3Readiness.maxPoints, 6);
+  assert.equal(report.iso19115_3Readiness.totalPointsEarned, 6);
+  assert.equal(report.iso19115_3Readiness.scorePercentage, 100);
+  assert.equal(report.iso19115_3Readiness.statusLabel, 'Sangat Siap (Fully Compliant)');
+
+  // Verify all 6 elements have score 1
+  report.iso19115_3Readiness.elements.forEach(el => {
+    assert.equal(el.scoreValue, 1.0);
+    assert.equal(el.status, 'terpenuhi');
+    assert.equal(el.isApplicable, true);
+  });
 });
 

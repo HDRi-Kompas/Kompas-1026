@@ -58,13 +58,16 @@ export function parseXmlMetadata(xmlString: string, fileName = 'metadata.xml'): 
     };
   }
 
-  // Detect format flavor
-  const isIso19139 = !!(parsed?.MD_Metadata || parsed?.['gmd:MD_Metadata'] || parsed?.metadata?.MD_Metadata);
+  // Detect root element and format flavor
+  const isMdb = /<mdb:MD_Metadata\b/i.test(xmlString) || /<(\w+:)?MD_Metadata\b[^>]*xmlns:mdb=/i.test(xmlString);
+  const isGmd = /<gmd:MD_Metadata\b/i.test(xmlString) || (/<(\w+:)?MD_Metadata\b/i.test(xmlString) && !isMdb);
+  const isIso19139 = isGmd || !!(parsed?.MD_Metadata || parsed?.['gmd:MD_Metadata'] || parsed?.metadata?.MD_Metadata);
   const isEsri = !!(parsed?.metadata?.idinfo || parsed?.metadata?.Esri || parsed?.idinfo);
-  const rawFormat = isIso19139 ? 'xml_iso19139' : isEsri ? 'xml_esri' : 'unknown';
+  const rawFormat = isMdb ? 'xml_iso19115_3' : (isIso19139 || isGmd) ? 'xml_iso19139' : isEsri ? 'xml_esri' : 'unknown';
+  const xmlRootElement = isMdb ? 'mdb:MD_Metadata' : (isGmd || isIso19139) ? 'gmd:MD_Metadata' : isEsri ? 'esri_metadata' : 'other';
 
   if (rawFormat === 'unknown') {
-    warnings.push('Format XML tidak secara langsung teridentifikasi sebagai ISO 19139 maupun Esri Metadata standar, menggunakan pelacakan heuristik semantik.');
+    warnings.push('Format XML tidak secara langsung teridentifikasi sebagai ISO 19115-3 (mdb), ISO 19139 (gmd), maupun Esri Metadata standar.');
   }
 
   // Helper to deep traverse and find first non-empty text node
@@ -241,8 +244,144 @@ export function parseXmlMetadata(xmlString: string, fileName = 'metadata.xml'): 
   const standardVersionMatch = findNode(parsed, ['metadataStandardVersion', 'metstdv']);
   const metaDateMatch = findNode(parsed, ['dateStamp', 'metd']);
 
+  // -----------------------------------------------------------------
+  // Elemen Ekstensi ISO 19115-3 (mdb:MD_Metadata) E27 - E32
+  // -----------------------------------------------------------------
+  // E27: mdb:spatialRepresentationInfo (topologyLevel, geometricObjectType, count)
+  let e27TopologyLevel: string | undefined;
+  let e27GeometricType: string | undefined;
+  let e27Count: number | undefined;
+
+  const topMatch = findNode(parsed, ['topologyLevel', 'MD_TopologyLevelCode', 'topologyLevelCode']) ||
+    xmlString.match(/topologyLevel[^>]*>(?:<[^>]+>)*([a-zA-Z0-9_]+)/i) ||
+    xmlString.match(/MD_TopologyLevelCode[^>]*codeListValue="([^"]+)"/i);
+  if (topMatch) e27TopologyLevel = typeof topMatch === 'object' && 'value' in topMatch ? String(topMatch.value) : (Array.isArray(topMatch) ? topMatch[1] : undefined);
+
+  const geomMatch = findNode(parsed, ['geometricObjectType', 'MD_GeometricObjectTypeCode', 'geometricObjectTypeCode']) ||
+    xmlString.match(/geometricObjectType[^>]*>(?:<[^>]+>)*([a-zA-Z0-9_]+)/i) ||
+    xmlString.match(/MD_GeometricObjectTypeCode[^>]*codeListValue="([^"]+)"/i);
+  if (geomMatch) e27GeometricType = typeof geomMatch === 'object' && 'value' in geomMatch ? String(geomMatch.value) : (Array.isArray(geomMatch) ? geomMatch[1] : undefined);
+
+  const countMatch = findNode(parsed, ['geometricObjectCount', 'count']) ||
+    xmlString.match(/geometricObjectCount[^>]*>(?:<[^>]+>)*(\d+)/i) ||
+    xmlString.match(/<count[^>]*>(\d+)<\/count>/i);
+  if (countMatch) {
+    const rawCount = typeof countMatch === 'object' && 'value' in countMatch ? Number(countMatch.value) : parseInt(countMatch[1], 10);
+    if (!isNaN(rawCount)) e27Count = rawCount;
+  }
+
+  rawEvidence.e27_spatialRepresentation = {
+    value: { topologyLevel: e27TopologyLevel, geometricObjectType: e27GeometricType, count: e27Count },
+    path: 'mdb:spatialRepresentationInfo',
+    isPlaceholder: false,
+  };
+
+  // E28: mdb:metadataScope/mcc:MD_Scope (MD_ScopeCode & name)
+  let e28ScopeCode: string | undefined;
+  let e28ScopeName: string | undefined;
+
+  const scopeCodeMatch = findNode(parsed, ['resourceScope', 'MD_ScopeCode', 'scopeCode']) ||
+    xmlString.match(/MD_ScopeCode[^>]*codeListValue="([^"]+)"/i) ||
+    xmlString.match(/resourceScope[^>]*>(?:<[^>]+>)*([a-zA-Z0-9_]+)/i);
+  if (scopeCodeMatch) e28ScopeCode = typeof scopeCodeMatch === 'object' && 'value' in scopeCodeMatch ? String(scopeCodeMatch.value) : (Array.isArray(scopeCodeMatch) ? scopeCodeMatch[1] : undefined);
+
+  const scopeNameMatch = findNode(parsed, ['metadataScopeName', 'scopeName', 'name']) ||
+    xmlString.match(/<(?:mcc:)?name[^>]*>(?:<[^>]+>)*([^<]+)<\//i);
+  if (scopeNameMatch) {
+    const candidateName = typeof scopeNameMatch === 'object' && 'value' in scopeNameMatch ? String(scopeNameMatch.value) : (Array.isArray(scopeNameMatch) ? scopeNameMatch[1] : undefined);
+    if (candidateName && candidateName !== e28ScopeCode && !candidateName.includes('<')) {
+      e28ScopeName = candidateName;
+    }
+  }
+
+  rawEvidence.e28_metadataScope = {
+    value: { scopeCode: e28ScopeCode, name: e28ScopeName },
+    path: 'mdb:metadataScope/mcc:MD_Scope',
+    isPlaceholder: false,
+  };
+
+  // E29: mdb:portrayalCatalogueInfo
+  let e29Citation: string | undefined;
+  let e29IsSpecificDoc = false;
+  const portrayalBlock = xmlString.match(/<(?:mdb:)?portrayalCatalogueInfo[\s\S]*?<\/(?:mdb:)?portrayalCatalogueInfo>/i)?.[0];
+  const portrayalNode = findNode(parsed, ['portrayalCatalogueInfo', 'portrayalCatalogueCitation', 'MD_PortrayalCatalogueReference']);
+  if (portrayalBlock || portrayalNode) {
+    const pText = portrayalBlock || JSON.stringify(portrayalNode?.value || '');
+    e29Citation = pText;
+    if (/sni|iho|s-52|perka|peraturan|spesifikasi|pedoman|katalog\s*simbol/i.test(pText)) {
+      e29IsSpecificDoc = true;
+    }
+  }
+
+  rawEvidence.e29_portrayalCatalogue = {
+    value: { citation: e29Citation, isSpecificDocument: e29IsSpecificDoc },
+    path: 'mdb:portrayalCatalogueInfo',
+    isPlaceholder: false,
+  };
+
+  // E30: mdb:applicationSchemaInfo (UML schema name & doc link)
+  let e30SchemaName: string | undefined;
+  let e30DocLink: string | undefined;
+  const appSchemaBlock = xmlString.match(/<(?:mdb:)?applicationSchemaInfo[\s\S]*?<\/(?:mdb:)?applicationSchemaInfo>/i)?.[0];
+  const appSchemaNode = findNode(parsed, ['applicationSchemaInfo', 'MD_ApplicationSchemaInformation', 'schemaAscii']);
+  if (appSchemaBlock || appSchemaNode) {
+    const asText = appSchemaBlock || JSON.stringify(appSchemaNode?.value || '');
+    const nameM = asText.match(/name[^>]*>(?:<[^>]+>)*([^<]+)<\//i) || asText.match(/title[^>]*>(?:<[^>]+>)*([^<]+)<\//i);
+    if (nameM) e30SchemaName = nameM[1];
+    const linkM = asText.match(/(https?:\/\/[^\s<"'>]+|\b[a-zA-Z0-9_\-\.\/]+\.(?:uml|xsd|pdf|docx?|html))\b/i);
+    if (linkM) e30DocLink = linkM[1];
+  }
+
+  rawEvidence.e30_applicationSchema = {
+    value: { schemaName: e30SchemaName, docLink: e30DocLink },
+    path: 'mdb:applicationSchemaInfo',
+    isPlaceholder: false,
+  };
+
+  // E31: mdb:contentInfo/mrc:MD_FeatureCatalogueDescription (KUGI compliance)
+  let e31ComplianceCode: boolean | undefined;
+  let e31CitesKugi = false;
+  const contentBlock = xmlString.match(/<(?:mdb:)?contentInfo[\s\S]*?<\/(?:mdb:)?contentInfo>/i)?.[0] ||
+    xmlString.match(/<(?:mrc:)?MD_FeatureCatalogueDescription[\s\S]*?<\/(?:mrc:)?MD_FeatureCatalogueDescription>/i)?.[0];
+  if (contentBlock) {
+    if (/katalog\s*unsur\s*geografi\s*indonesia|kugi/i.test(contentBlock) || /kugi/i.test(xmlString)) {
+      e31CitesKugi = true;
+    }
+    const compM = contentBlock.match(/complianceCode[^>]*>(?:<[^>]+>)*(true|false|1|0)/i) ||
+      contentBlock.match(/complianceCode="?(true|false|1|0)"?/i);
+    if (compM) {
+      e31ComplianceCode = compM[1].toLowerCase() === 'true' || compM[1] === '1';
+    }
+  }
+
+  rawEvidence.e31_kugiCompliance = {
+    value: { complianceCode: e31ComplianceCode, citesKugi: e31CitesKugi },
+    path: 'mdb:contentInfo/mrc:MD_FeatureCatalogueDescription',
+    isPlaceholder: false,
+  };
+
+  // E32: mdb:distributionInfo (WMS/WFS/CSW service link & operation desc)
+  let e32ServiceUrl: string | undefined;
+  let e32OperationDesc: string | undefined;
+  const distBlock = xmlString.match(/<(?:mdb:)?distributionInfo[\s\S]*?<\/(?:mdb:)?distributionInfo>/i)?.[0] ||
+    xmlString.match(/<(?:mrd:)?MD_Distribution[\s\S]*?<\/(?:mrd:)?MD_Distribution>/i)?.[0];
+  if (distBlock) {
+    const urlM = distBlock.match(/(https?:\/\/[^\s<"'>]+)/i);
+    if (urlM) e32ServiceUrl = urlM[1];
+    const descM = distBlock.match(/description[^>]*>(?:<[^>]+>)*([^<]+)<\//i);
+    if (descM && descM[1].length > 3) e32OperationDesc = descM[1];
+  }
+
+  rawEvidence.e32_distributionService = {
+    value: { serviceUrl: e32ServiceUrl, operationDescription: e32OperationDesc },
+    path: 'mdb:distributionInfo',
+    isPlaceholder: false,
+  };
+
   return {
     rawFormat,
+    xmlRootElement,
+    isMdbFormat: isMdb,
     fileName,
     fileSizeBytes: new Blob([xmlString]).size,
     parsedAt: new Date().toISOString(),
@@ -284,8 +423,8 @@ export function parseXmlMetadata(xmlString: string, fileName = 'metadata.xml'): 
       softwareUsed: findNode(parsed, ['software', 'processSoftware'])?.value,
     },
     metaMetadata: {
-      standardName: typeof standardNameMatch?.value === 'string' ? standardNameMatch.value : isIso19139 ? 'ISO 19115/19139' : isEsri ? 'Esri Metadata' : undefined,
-      standardVersion: typeof standardVersionMatch?.value === 'string' ? standardVersionMatch.value : undefined,
+      standardName: typeof standardNameMatch?.value === 'string' ? standardNameMatch.value : isMdb ? 'ISO 19115-3 (mdb)' : isIso19139 ? 'ISO 19115/19139 (gmd)' : isEsri ? 'Esri Metadata' : undefined,
+      standardVersion: typeof standardVersionMatch?.value === 'string' ? standardVersionMatch.value : isMdb ? '2018/2021' : undefined,
       metadataDate: typeof metaDateMatch?.value === 'string' ? metaDateMatch.value : undefined,
     },
     rawEvidence,
