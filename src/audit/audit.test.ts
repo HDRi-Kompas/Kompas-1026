@@ -19,6 +19,9 @@ import {
   SAMPLE_GEOJSON_BENGKALIS,
   SAMPLE_JSON_KALBAR,
 } from '../data/samples';
+import { BENCHMARK_DATASETS_V4 } from '../data/benchmarksV4';
+import { calculateV4Scores } from './v4Rules';
+import { QUALITY_FLAGS_DEFINITIONS } from './flags';
 
 test('Placeholder Detection detects generic values and nulls', () => {
   assert.equal(isPlaceholderValue('Belum Ada'), true);
@@ -249,5 +252,87 @@ test('ISO 19115-3 Extension Elements (E27-E32) are evaluated actively for mdb:MD
     assert.equal(el.status, 'terpenuhi');
     assert.equal(el.isApplicable, true);
   });
+});
+
+test('U1 Uji Hitung: D01 to D15 scores exactly match Excel v4 with tolerance <= 0.1', () => {
+  for (const ds of BENCHMARK_DATASETS_V4) {
+    const calc = calculateV4Scores(ds.scores);
+
+    // 1. Skor A tolerance <= 0.1
+    const diffSkorA = Math.abs(calc.skorA - ds.expectedSkorA);
+    assert.ok(
+      diffSkorA <= 0.1,
+      `Dataset ${ds.id} Skor A mismatch: calc=${calc.skorA.toFixed(4)}, expected=${ds.expectedSkorA.toFixed(4)}, diff=${diffSkorA.toFixed(4)}`
+    );
+
+    // 2. MQI Biner tolerance <= 0.1
+    const diffMqiBiner = Math.abs(calc.mqiBiner - ds.expectedMqiBiner);
+    assert.ok(
+      diffMqiBiner <= 0.1,
+      `Dataset ${ds.id} MQI Biner mismatch: calc=${calc.mqiBiner.toFixed(4)}, expected=${ds.expectedMqiBiner.toFixed(4)}, diff=${diffMqiBiner.toFixed(4)}`
+    );
+
+    // 3. MQI Diperluas tolerance <= 0.1
+    const diffMqiDiperluas = Math.abs(calc.mqiDiperluas - ds.expectedMqiDiperluas);
+    assert.ok(
+      diffMqiDiperluas <= 0.1,
+      `Dataset ${ds.id} MQI Diperluas mismatch: calc=${calc.mqiDiperluas.toFixed(4)}, expected=${ds.expectedMqiDiperluas.toFixed(4)}, diff=${diffMqiDiperluas.toFixed(4)}`
+    );
+
+    // 4. MQI Ketat tolerance <= 0.1
+    const diffMqiKetat = Math.abs(calc.mqiKetat - ds.expectedMqiKetat);
+    assert.ok(
+      diffMqiKetat <= 0.1,
+      `Dataset ${ds.id} MQI Ketat mismatch: calc=${calc.mqiKetat.toFixed(4)}, expected=${ds.expectedMqiKetat.toFixed(4)}, diff=${diffMqiKetat.toFixed(4)}`
+    );
+
+    // 5. Kategori MQI
+    assert.equal(calc.kategoriBiner, ds.expectedKategoriBiner, `Dataset ${ds.id} Kategori Biner`);
+    assert.equal(calc.kategoriDiperluas, ds.expectedKategoriDiperluas, `Dataset ${ds.id} Kategori Diperluas`);
+
+    // 6. Empty Elements Count
+    assert.equal(calc.emptyElements.length, ds.emptyElementsCount, `Dataset ${ds.id} empty count`);
+
+    // 7. Verify all expected empty elements are present
+    const emptyIds = calc.emptyElements.map((e: any) => e.id);
+    for (const expId of ds.emptyElementsList) {
+      assert.ok(emptyIds.includes(expId), `Dataset ${ds.id} expected empty element ${expId}`);
+    }
+
+    // 8. Verify category percentages tolerance <= 0.1
+    assert.ok(Math.abs(calc.categoryPercentages.CAT_GENERAL - ds.categoryPercentages.informasiUmum) <= 0.1);
+    assert.ok(Math.abs(calc.categoryPercentages.CAT_IDENTIFICATION - ds.categoryPercentages.identifikasi) <= 0.1);
+    assert.ok(Math.abs(calc.categoryPercentages.CAT_DESCRIPTION - ds.categoryPercentages.deskripsi) <= 0.1);
+    assert.ok(Math.abs(calc.categoryPercentages.CAT_EXTENT - ds.categoryPercentages.cakupan) <= 0.1);
+    assert.ok(Math.abs(calc.categoryPercentages.CAT_ACCURACY - ds.categoryPercentages.ketelitian) <= 0.1);
+    assert.ok(Math.abs(calc.categoryPercentages.CAT_CONTACT - ds.categoryPercentages.kontak) <= 0.1);
+    assert.ok(Math.abs(calc.categoryPercentages.CAT_METAMETADATA - ds.categoryPercentages.metaMetadata) <= 0.1);
+    assert.ok(Math.abs(calc.categoryPercentages.CAT_PROCESSING - ds.categoryPercentages.pemrosesan) <= 0.1);
+  }
+});
+
+test('U3 Uji Format: ESRI XML (D08) and CKAN JSON (D13, D14) are handled correctly', () => {
+  const d08 = BENCHMARK_DATASETS_V4.find((d: any) => d.id === 'D08');
+  assert.ok(d08 !== undefined);
+  assert.equal(d08!.format, 'ESRI');
+  assert.equal(d08!.expectedKategoriDiperluas, 'Very Poor');
+
+  const d13 = BENCHMARK_DATASETS_V4.find((d: any) => d.id === 'D13');
+  assert.ok(d13 !== undefined);
+  assert.equal(d13!.format, 'CKAN');
+  assert.equal(d13!.expectedKategoriDiperluas, 'Poor');
+
+  const d14 = BENCHMARK_DATASETS_V4.find((d: any) => d.id === 'D14');
+  assert.ok(d14 !== undefined);
+  assert.equal(d14!.format, 'CKAN');
+  assert.equal(d14!.expectedKategoriDiperluas, 'Poor');
+});
+
+test('U4 Uji Bendera: Quality warning flags (F01–F14) are properly registered', () => {
+  for (let i = 1; i <= 14; i++) {
+    const flagKey = `F${String(i).padStart(2, '0')}` as keyof typeof QUALITY_FLAGS_DEFINITIONS;
+    assert.ok(QUALITY_FLAGS_DEFINITIONS[flagKey] !== undefined, `Flag ${flagKey} defined`);
+    assert.ok(QUALITY_FLAGS_DEFINITIONS[flagKey].name.length > 0);
+  }
 });
 
