@@ -1,8 +1,9 @@
 /**
- * KOMPAS - Audit Results & Diagnostic Dashboard (Excel v4 Aligned)
- * Displays Skor A, MQI Biner, MQI Diperluas, MQI Ketat, 26 Core Elements E01-E26,
- * Manual Review Panel, Empty Elements sorted by weight impact, Quality Flags F01-F14,
- * Extensions E27-E32, Benchmark Explorer, and comprehensive CSV & JSON exports.
+ * KOMPAS - Audit Results & Diagnostic Dashboard (v7 Aligned)
+ * Displays Skor Utama (32 Elemen), MQI Biner, MQI Diperluas, MQI Ketat,
+ * Skor Inti (26 Elemen), Skor Ekstensi (E27–E32), 32 Elements Table with O/U/M modes,
+ * Manual Review Panel, Empty Elements sorted by weight descending, Quality Flags F01-F14,
+ * Benchmark Explorer D01–D18, JSON Config Manager, and 17-column CSV & JSON exports.
  */
 
 import React, { useState } from 'react';
@@ -35,18 +36,22 @@ import {
   AlertCircle,
   RefreshCw,
   FolderOpen,
+  Settings,
+  UploadCloud,
 } from 'lucide-react';
 import { AuditReport, MQICategory, ParameterAuditResult } from '../types/audit';
-import { MQI_CATEGORIES } from '../audit/methodology';
 import {
-  CORE_ELEMENTS_V4,
-  EXTENSION_ELEMENTS_V4,
-  CATEGORY_WEIGHTS_V4,
-  calculateV4Scores,
-  ElementRuleV4,
-} from '../audit/v4Rules';
+  getConfigElements,
+  getOpenDecisions,
+  updateOpenDecisions,
+  getRuleVersion,
+  loadCustomConfig,
+  resetToDefaultConfig,
+  ElementConfigItem,
+} from '../audit/configLoader';
+import { calculateV7Scores, V7ScoreResult } from '../audit/v7Scoring';
 import { QUALITY_FLAGS_DEFINITIONS, QualityFlagResult } from '../audit/flags';
-import { BENCHMARK_DATASETS_V4, BenchmarkDatasetV4 } from '../data/benchmarksV4';
+import { getBenchmarkDatasetsV7, BenchmarkDatasetV7 } from '../data/benchmarksV7';
 import { EvidenceModal } from './EvidenceModal';
 import { OpenStreetMapViewer } from './OpenStreetMapViewer';
 import { AuditComparisonBarChart } from './AuditComparisonBarChart';
@@ -63,14 +68,17 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
   report,
   onBackToDashboard,
 }) => {
+  const elements = getConfigElements();
+  const openDecisions = getOpenDecisions();
+
   const [selectedResult, setSelectedResult] = useState<ParameterAuditResult | null>(null);
   const [activeTab, setActiveTab] = useState<
-    'v4elements' | 'manualReview' | 'emptyElements' | 'warnings' | 'extensions' | 'benchmarks' | 'categories' | 'iso19115' | 'map'
-  >('v4elements');
+    'v7elements' | 'manualReview' | 'emptyElements' | 'warnings' | 'benchmarks' | 'categories' | 'config' | 'map'
+  >('v7elements');
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [selectedScoreFilter, setSelectedScoreFilter] = useState<string>('all');
+  const [selectedModeFilter, setSelectedModeFilter] = useState<string>('all');
   const [isBenchmarkModalOpen, setIsBenchmarkModalOpen] = useState<boolean>(false);
 
   // Manual Overrides State & Auditor Notes
@@ -80,12 +88,16 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
   const [auditorNotes, setAuditorNotes] = useState<string>(report.auditorNotes || '');
   const [activeDatasetTitle, setActiveDatasetTitle] = useState<string>(report.datasetName);
   const [activeFormat, setActiveFormat] = useState<string>(report.statusSkema || report.normalizedMetadata?.rawFormat || 'gmd');
+  const [configUploadError, setConfigUploadError] = useState<string | null>(null);
+  const [configUploadSuccess, setConfigUploadSuccess] = useState<string | null>(null);
 
-  // Starting element scores
+  // Starting element scores across all 32 elements
   const [elementScores, setElementScores] = useState<Record<string, number>>(() => {
     const initial: Record<string, number> = {};
-    for (const el of CORE_ELEMENTS_V4) {
-      if (report.elementValuesV4 && report.elementValuesV4[el.id] !== undefined) {
+    for (const el of elements) {
+      if (report.elementValuesV7 && report.elementValuesV7[el.id] !== undefined) {
+        initial[el.id] = report.elementValuesV7[el.id];
+      } else if (report.elementValuesV4 && report.elementValuesV4[el.id] !== undefined) {
         initial[el.id] = report.elementValuesV4[el.id];
       } else {
         const matched = report.coreElementsResults?.find(r => r.elementId === el.id || r.ruleId === el.id);
@@ -101,11 +113,9 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
     return initial;
   });
 
-  // Calculate live V4 scores reactive to manual overrides
-  const activeV4 = calculateV4Scores(elementScores);
+  // Calculate live V7 scores reactive to manual overrides
+  const activeV7 = calculateV7Scores(elementScores);
   const spatialData = resolveSpatialFromReport(report);
-  const readiness = report.iso19115_3Readiness;
-  const iso19115Compliance = report.iso19115Compliance;
 
   // Handle manual override change
   const handleOverrideChange = (elementId: string, value: number, notes: string) => {
@@ -129,21 +139,62 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
     setManualOverrides(updatedOverrides);
 
     // Revert to original auto score
-    const autoScore = report.elementValuesV4?.[elementId] ?? 0;
+    const autoScore = report.elementValuesV7?.[elementId] ?? report.elementValuesV4?.[elementId] ?? 0;
     setElementScores(prev => ({ ...prev, [elementId]: autoScore }));
   };
 
-  // Load a reference dataset from Excel v4
-  const handleLoadBenchmarkDataset = (benchmark: BenchmarkDatasetV4) => {
+  // Load a reference dataset from Excel v7
+  const handleLoadBenchmarkDataset = (benchmark: BenchmarkDatasetV7) => {
     setActiveDatasetTitle(benchmark.title);
     setActiveFormat(benchmark.format);
     setElementScores({ ...benchmark.scores });
-    setManualOverrides({});
-    setAuditorNotes(`Dimuat dari Acuan Uji ${benchmark.id}: ${benchmark.notes}`);
   };
 
-  // CSV Export Handler per Section 10 & Handover page 9
+  // Handle custom JSON config upload (e.g. v8)
+  const handleConfigUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = event => {
+      const content = event.target?.result as string;
+      const res = loadCustomConfig(content);
+      if (res.success) {
+        setConfigUploadSuccess(`Konfigurasi aturan berhasil diperbarui: Versi ${res.version}`);
+        setConfigUploadError(null);
+      } else {
+        setConfigUploadError(res.errors?.join('; ') || 'Gagal memvalidasi JSON konfigurasi.');
+        setConfigUploadSuccess(null);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // 17-Column Export CSV implementation
   const handleExportCsv = () => {
+    const catScores = [
+      activeV7.categoryScores['Informasi umum']?.toFixed(1) || '0.0',
+      activeV7.categoryScores['Identifikasi']?.toFixed(1) || '0.0',
+      activeV7.categoryScores['Deskripsi']?.toFixed(1) || '0.0',
+      activeV7.categoryScores['Cakupan']?.toFixed(1) || '0.0',
+      activeV7.categoryScores['Ketelitian']?.toFixed(1) || '0.0',
+      activeV7.categoryScores['Kontak']?.toFixed(1) || '0.0',
+      activeV7.categoryScores['Meta-metadata']?.toFixed(1) || '0.0',
+      activeV7.categoryScores['Pemrosesan']?.toFixed(1) || '0.0',
+    ];
+
+    const core26Values = elements.filter(e => e.inti).map(e => elementScores[e.id] ?? 0);
+    const ext6Values = elements.filter(e => !e.inti).map(e => elementScores[e.id] ?? 0);
+
+    const emptyListStr = activeV7.emptyElements.map(e => `${e.id} (w=${e.weight})`).join(', ');
+    const pendingReviewList = elements
+      .filter(e => openDecisions.assessmentModes[e.id] === 'M' && manualOverrides[e.id] === undefined)
+      .map(e => e.id)
+      .join(', ');
+
+    const triggeredFlagsStr = (report.qualityFlags || []).filter(f => f.isTriggered).map(f => f.id).join(', ');
+    const overrideStr = Object.entries(manualOverrides).map(([k, v]) => `${k}=${v.value}`).join('; ');
+
     const headers = [
       'ID_Dataset',
       'Judul_Dataset',
@@ -152,133 +203,123 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
       'Skor_A',
       'MQI_Biner',
       'MQI_Diperluas',
-      'MQI_Ketat',
-      'Kategori_MQI_Biner',
-      'Kategori_MQI_Diperluas',
-      'Skor_Kat_1',
-      'Skor_Kat_2',
-      'Skor_Kat_3',
-      'Skor_Kat_4',
-      'Skor_Kat_5',
-      'Skor_Kat_6',
-      'Skor_Kat_7',
-      'Skor_Kat_8',
-      ...CORE_ELEMENTS_V4.map(e => `Nilai_${e.id}`),
+      'Kategori_MQI',
+      'Skor_Kat_InfoUmum',
+      'Skor_Kat_Identifikasi',
+      'Skor_Kat_Deskripsi',
+      'Skor_Kat_Cakupan',
+      'Skor_Kat_Ketelitian',
+      'Skor_Kat_Kontak',
+      'Skor_Kat_MetaMetadata',
+      'Skor_Kat_Pemrosesan',
+      ...elements.filter(e => e.inti).map(e => `Nilai_${e.id}`),
       'Skor_Ekstensi',
-      ...EXTENSION_ELEMENTS_V4.map(e => `Nilai_${e.id}`),
+      ...elements.filter(e => !e.inti).map(e => `Nilai_${e.id}`),
       'Daftar_Elemen_Kosong',
-      'Daftar_Bendera_Peringatan',
+      'Daftar_Elemen_Belum_Dinilai',
+      'Daftar_Peringatan',
       'Override',
       'Catatan_Auditor',
       'Versi_Aturan',
     ];
-
-    const catScores = [
-      activeV4.categoryPercentages.CAT_GENERAL.toFixed(1),
-      activeV4.categoryPercentages.CAT_IDENTIFICATION.toFixed(1),
-      activeV4.categoryPercentages.CAT_DESCRIPTION.toFixed(1),
-      activeV4.categoryPercentages.CAT_EXTENT.toFixed(1),
-      activeV4.categoryPercentages.CAT_ACCURACY.toFixed(1),
-      activeV4.categoryPercentages.CAT_CONTACT.toFixed(1),
-      activeV4.categoryPercentages.CAT_METAMETADATA.toFixed(1),
-      activeV4.categoryPercentages.CAT_PROCESSING.toFixed(1),
-    ];
-
-    const elementValuesList = CORE_ELEMENTS_V4.map(e => elementScores[e.id] ?? 0);
-    const extScoreStr = report.skorEkstensiV4 !== null && report.skorEkstensiV4 !== undefined ? report.skorEkstensiV4.toFixed(1) : 'N/A';
-    const extValuesList = EXTENSION_ELEMENTS_V4.map(e => report.extensionElementsResults?.find(x => x.elementId === e.id)?.scoreValue ?? 'N/A');
-
-    const emptyListStr = activeV4.emptyElements.map(e => `${e.id} (w=${e.weight})`).join(', ');
-    const triggeredFlagsStr = (report.qualityFlags || []).filter(f => f.isTriggered).map(f => f.id).join(', ');
-    const overrideStr = Object.entries(manualOverrides).map(([k, v]) => `${k}=${v.value}`).join('; ');
 
     const row = [
       `"${report.id}"`,
       `"${(activeDatasetTitle || '').replace(/"/g, '""')}"`,
       `"${report.profileId}"`,
       `"${activeFormat}"`,
-      activeV4.skorA.toFixed(2),
-      activeV4.mqiBiner.toFixed(2),
-      activeV4.mqiDiperluas.toFixed(2),
-      activeV4.mqiKetat.toFixed(2),
-      `"${activeV4.kategoriBiner}"`,
-      `"${activeV4.kategoriDiperluas}"`,
+      activeV7.skorA.toFixed(2),
+      activeV7.mqiBiner.toFixed(2),
+      activeV7.mqiDiperluas.toFixed(2),
+      `"${activeV7.kategoriDiperluas}"`,
       ...catScores,
-      ...elementValuesList,
-      `"${extScoreStr}"`,
-      ...extValuesList,
+      ...core26Values,
+      activeV7.skorEkstensi.toFixed(2),
+      ...ext6Values,
       `"${emptyListStr}"`,
-      `"${triggeredFlagsStr}"`,
-      `"${overrideStr.replace(/"/g, '""')}"`,
-      `"${auditorNotes.replace(/"/g, '""')}"`,
-      `"v4-2026-10-29"`,
+      `"${pendingReviewList || '-'}"`,
+      `"${triggeredFlagsStr || '-'}"`,
+      `"${overrideStr.replace(/"/g, '""') || '-'}"`,
+      `"${auditorNotes.replace(/"/g, '""') || '-'}"`,
+      `"${activeV7.versiAturan}"`,
     ];
 
     const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + headers.join(',') + '\n' + row.join(',');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `KOMPAS_Audit_${report.id}.csv`);
+    link.setAttribute('download', `KOMPAS_Audit_${report.id}_${activeV7.versiAturan}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  // JSON Export Handler per Section 10 & Handover page 9
+  // 17-Column Export JSON implementation
   const handleExportJson = () => {
-    const jsonExportData = {
+    const exportData = {
       ID_Dataset: report.id,
       Judul_Dataset: activeDatasetTitle,
       Kelompok_Sumber: report.profileId,
       Status_Format: activeFormat,
-      Skor_A: parseFloat(activeV4.skorA.toFixed(2)),
-      MQI_Biner: parseFloat(activeV4.mqiBiner.toFixed(2)),
-      MQI_Diperluas: parseFloat(activeV4.mqiDiperluas.toFixed(2)),
-      MQI_Ketat: parseFloat(activeV4.mqiKetat.toFixed(2)),
-      Kategori_MQI_Biner: activeV4.kategoriBiner,
-      Kategori_MQI_Diperluas: activeV4.kategoriDiperluas,
-      Skor_Kategori: activeV4.categoryPercentages,
-      Nilai_Elemen_E01_E26: elementScores,
-      Skor_Ekstensi: report.skorEkstensiV4,
-      Nilai_Elemen_E27_E32: report.extensionElementsResults?.map(e => ({ id: e.elementId, score: e.scoreValue, status: e.status })),
-      Daftar_Elemen_Kosong: activeV4.emptyElements,
-      Daftar_Bendera_Peringatan: (report.qualityFlags || []).filter(f => f.isTriggered).map(f => ({ id: f.id, name: f.name, evidence: f.evidence })),
+      Skor_A: Number(activeV7.skorA.toFixed(4)),
+      MQI_Biner: Number(activeV7.mqiBiner.toFixed(4)),
+      MQI_Diperluas: Number(activeV7.mqiDiperluas.toFixed(4)),
+      MQI_Ketat: Number(activeV7.mqiKetat.toFixed(4)),
+      Skor_A_Inti_26: Number(activeV7.skorAInti.toFixed(4)),
+      MQI_Biner_Inti_26: Number(activeV7.mqiBinerInti.toFixed(4)),
+      MQI_Diperluas_Inti_26: Number(activeV7.mqiDiperluasInti.toFixed(4)),
+      Kategori_MQI: activeV7.kategoriDiperluas,
+      Kategori_Biner: activeV7.kategoriBiner,
+      Kategori_Inti: activeV7.kategoriInti,
+      Skor_Kategori: activeV7.categoryScores,
+      Nilai_E01_sd_E26: Object.fromEntries(
+        elements.filter(e => e.inti).map(e => [e.id, elementScores[e.id] ?? 0])
+      ),
+      Skor_Ekstensi: Number(activeV7.skorEkstensi.toFixed(4)),
+      Nilai_E27_sd_E32: Object.fromEntries(
+        elements.filter(e => !e.inti).map(e => [e.id, elementScores[e.id] ?? 0])
+      ),
+      Daftar_Elemen_Kosong: activeV7.emptyElements,
+      Daftar_Elemen_Belum_Dinilai: elements
+        .filter(e => openDecisions.assessmentModes[e.id] === 'M' && manualOverrides[e.id] === undefined)
+        .map(e => e.id),
+      Daftar_Peringatan: (report.qualityFlags || []).filter(f => f.isTriggered).map(f => ({
+        id: f.id,
+        name: f.name,
+        evidence: f.evidence,
+      })),
       Override: manualOverrides,
       Catatan_Auditor: auditorNotes,
-      Versi_Aturan: 'v4-2026-10-29',
-      Timestamp: new Date().toISOString(),
+      Versi_Aturan: activeV7.versiAturan,
+      Waktu_Audit: report.timestamp,
     };
 
-    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(jsonExportData, null, 2));
-    const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute('href', dataStr);
-    downloadAnchor.setAttribute('download', `KOMPAS_Report_${report.id}.json`);
-    document.body.appendChild(downloadAnchor);
-    downloadAnchor.click();
-    downloadAnchor.remove();
+    const jsonContent = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(exportData, null, 2));
+    const link = document.createElement('a');
+    link.setAttribute('href', jsonContent);
+    link.setAttribute('download', `KOMPAS_Audit_${report.id}_${activeV7.versiAturan}.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
-  // Filter 26 elements in main table
-  const filteredElements = CORE_ELEMENTS_V4.filter(el => {
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      const match =
-        el.id.toLowerCase().includes(q) ||
-        el.name.toLowerCase().includes(q) ||
-        el.definition.toLowerCase().includes(q);
-      if (!match) return false;
-    }
-    if (selectedCategory !== 'all' && el.category !== selectedCategory) return false;
-    if (selectedScoreFilter !== 'all') {
-      const val = elementScores[el.id];
-      if (selectedScoreFilter === '1' && val !== 1) return false;
-      if (selectedScoreFilter === '0.5' && val !== 0.5) return false;
-      if (selectedScoreFilter === '0' && val !== 0) return false;
-    }
-    return true;
-  });
-
   const triggeredFlags = (report.qualityFlags || []).filter(f => f.isTriggered);
+
+  // Filter elements for the 32 elements table
+  const filteredElements = elements.filter(el => {
+    const elMode = openDecisions.assessmentModes[el.id] || 'O';
+    const score = elementScores[el.id] ?? 0;
+
+    const matchesSearch =
+      el.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      el.nama.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      el.kategori.toLowerCase().includes(searchQuery.toLowerCase());
+
+    const matchesCat = selectedCategory === 'all' || el.kategori === selectedCategory;
+    const matchesMode = selectedModeFilter === 'all' || elMode === selectedModeFilter;
+
+    return matchesSearch && matchesCat && matchesMode;
+  });
 
   return (
     <div className="space-y-8">
@@ -309,6 +350,10 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
               Format: {activeFormat}
             </span>
             <span aria-hidden="true">·</span>
+            <span className="px-2 py-0.5 rounded bg-cyan-950 border border-cyan-800 text-cyan-300 font-bold">
+              Versi Aturan: {activeV7.versiAturan}
+            </span>
+            <span aria-hidden="true">·</span>
             <span>{new Date(report.timestamp).toLocaleString('id-ID')}</span>
           </div>
           <h1 className="text-2xl font-bold text-white tracking-tight">
@@ -323,14 +368,14 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
             className="px-3 py-2 text-xs font-semibold text-cyan-400 hover:text-cyan-300 bg-cyan-950/40 hover:bg-cyan-950/80 border border-cyan-800/80 rounded-xl transition-all flex items-center gap-1.5 shadow-sm"
           >
             <FileSpreadsheet className="w-3.5 h-3.5" />
-            <span>Matriks Acuan Uji (D01–D15)</span>
+            <span>Matriks Acuan Uji (D01–D18)</span>
           </button>
           <button
             onClick={handleExportCsv}
             className="px-3 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl transition-all flex items-center gap-1.5 shadow-sm"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>Ekspor CSV</span>
+            <span>Ekspor CSV (17 Kolom)</span>
           </button>
           <button
             onClick={handleExportJson}
@@ -349,396 +394,389 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
         </div>
       </div>
 
-      {/* SCORE HERO SECTION: EMPAT JENIS SKOR MQI BERDASARKAN EXCEL V4 */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 lg:p-8 space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-          <div>
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-cyan-400" />
-              <span className="text-xs font-mono font-bold text-cyan-400 uppercase tracking-wide">
-                Indeks Kualitas Metadata (Excel v4 &amp; Hasara 2026)
-              </span>
-            </div>
-            <h2 className="text-lg font-bold text-white mt-0.5">
-              Hasil Penilaian Komparatif Kualitas Metadata Geospasial
-            </h2>
+      {/* 4 Headline Score Cards + Core Score + Extension Score */}
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
+        {/* Skor A (Bobot Kategori 32 Elemen) */}
+        <div className="bg-gradient-to-br from-slate-900 via-slate-850 to-cyan-950/40 border border-cyan-800/60 rounded-2xl p-4 shadow-lg relative overflow-hidden">
+          <div className="flex items-center justify-between text-cyan-400 mb-1">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider">Skor A (32 Elemen)</span>
+            <Award className="w-4 h-4" />
           </div>
-          <div className="flex items-center gap-2 self-start sm:self-auto">
-            <span className="text-xs font-mono text-slate-400">
-              Versi Aturan: <strong className="text-white">v4-2026-10-29</strong>
-            </span>
+          <div className="text-3xl font-black font-mono text-white tabular-nums">
+            {activeV7.skorA.toFixed(1)}
+            <span className="text-sm font-normal text-slate-400 ml-1">/ 100</span>
           </div>
+          <div className="text-[11px] text-cyan-300 font-medium mt-1">
+            Skema A (Bobot Kategori)
+          </div>
+          <div className="text-[10px] text-slate-400 mt-0.5">Skor Utama KOMPAS v7</div>
         </div>
 
-        {/* Grid 4 Kartu Skor Utama */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* KARTU 1: SKOR A (Skema Bobot Utama) */}
-          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-5 space-y-2 relative overflow-hidden group hover:border-cyan-500/50 transition-all">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-slate-300">Skor A (Bobot Utama)</span>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
-                8 Kategori
-              </span>
-            </div>
-            <div className="text-3xl font-extrabold font-mono text-white tracking-tight tabular-nums">
-              {activeV4.skorA.toFixed(1)}
-              <span className="text-sm font-normal text-slate-400 ml-1">/ 100</span>
-            </div>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              Σ (Fraksi Kategori × Bobot Kategori). Bobot utama kelautan &amp; BIG.
-            </p>
+        {/* MQI Biner (32 Elemen) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md">
+          <div className="flex items-center justify-between text-slate-400 mb-1">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider">MQI Biner (32)</span>
+            <Compass className="w-4 h-4 text-blue-400" />
           </div>
-
-          {/* KARTU 2: MQI BINER (Paper Asli) */}
-          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-5 space-y-2 relative overflow-hidden group hover:border-purple-500/50 transition-all">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-slate-300">MQI Biner (Paper Asli)</span>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-800">
-                Hasara 2026
-              </span>
-            </div>
-            <div className="text-3xl font-extrabold font-mono text-purple-400 tracking-tight tabular-nums">
-              {activeV4.mqiBiner.toFixed(1)}%
-            </div>
-            <div className="flex items-center gap-1.5 text-[11px]">
-              <span className="text-slate-400">Kategori:</span>
-              <span className="font-bold text-purple-300">{activeV4.kategoriBiner}</span>
-            </div>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              Nilai &gt;0 dihitung ada. Sebanding rumus paper MQI hlm 766.
-            </p>
+          <div className="text-3xl font-black font-mono text-cyan-300 tabular-nums">
+            {activeV7.mqiBiner.toFixed(1)}
+            <span className="text-sm font-normal text-slate-400 ml-1">%</span>
           </div>
-
-          {/* KARTU 3: MQI DIPERLUAS (3 Tingkat Mutu) */}
-          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-5 space-y-2 relative overflow-hidden group hover:border-cyan-500/50 transition-all ring-1 ring-cyan-500/30">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-slate-300">MQI Diperluas (Mutu)</span>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800 font-bold">
-                Skor Mutu
-              </span>
-            </div>
-            <div className="text-3xl font-extrabold font-mono text-cyan-400 tracking-tight tabular-nums">
-              {activeV4.mqiDiperluas.toFixed(1)}%
-            </div>
-            <div className="flex items-center gap-1.5 text-[11px]">
-              <span className="text-slate-400">Kategori:</span>
-              <span className="font-bold text-cyan-300">{activeV4.kategoriDiperluas}</span>
-            </div>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              Mempertahankan nilai 1, 0.5, dan 0 tanpa pembobotan kategori.
-            </p>
+          <div className="text-[11px] text-slate-300 font-medium mt-1">
+            Kategori: <strong className="text-white">{activeV7.kategoriBiner}</strong>
           </div>
-
-          {/* KARTU 4: MQI KETAT (Sensitivitas) */}
-          <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-5 space-y-2 relative overflow-hidden group hover:border-amber-500/50 transition-all">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-slate-300">MQI Ketat (Sensitivitas)</span>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800">
-                Nilai 1 Saja
-              </span>
-            </div>
-            <div className="text-3xl font-extrabold font-mono text-amber-400 tracking-tight tabular-nums">
-              {activeV4.mqiKetat.toFixed(1)}%
-            </div>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              Hanya elemen bernilai 1.0 yang dihitung memenuhi (penilaian ketat).
-            </p>
-          </div>
+          <div className="text-[10px] text-slate-500 mt-0.5">Hasara (2026) Formula</div>
         </div>
 
-        {/* Status Strip: Jumlah Elemen Memenuhi / Sebagian / Kosong & Status Skema */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-4 border-t border-slate-800 text-xs">
-          <div className="bg-slate-950/80 p-3 rounded-xl border border-emerald-900/40 flex items-center justify-between">
-            <div>
-              <div className="text-slate-400 text-[11px]">Memenuhi (1.0)</div>
-              <div className="text-lg font-bold font-mono text-emerald-400 tabular-nums">
-                {activeV4.elementsFulfilledCount} Elemen
-              </div>
-            </div>
-            <CheckCircle2 className="w-5 h-5 text-emerald-500/60" />
+        {/* MQI Diperluas (32 Elemen) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md">
+          <div className="flex items-center justify-between text-slate-400 mb-1">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider">MQI Diperluas (32)</span>
+            <TrendingUp className="w-4 h-4 text-emerald-400" />
           </div>
-
-          <div className="bg-slate-950/80 p-3 rounded-xl border border-amber-900/40 flex items-center justify-between">
-            <div>
-              <div className="text-slate-400 text-[11px]">Sebagian (0.5)</div>
-              <div className="text-lg font-bold font-mono text-amber-400 tabular-nums">
-                {activeV4.elementsPartialCount} Elemen
-              </div>
-            </div>
-            <HelpCircle className="w-5 h-5 text-amber-500/60" />
+          <div className="text-3xl font-black font-mono text-emerald-400 tabular-nums">
+            {activeV7.mqiDiperluas.toFixed(1)}
+            <span className="text-sm font-normal text-slate-400 ml-1">%</span>
           </div>
-
-          <div className="bg-slate-950/80 p-3 rounded-xl border border-rose-900/40 flex items-center justify-between">
-            <div>
-              <div className="text-slate-400 text-[11px]">Kosong (0.0)</div>
-              <div className="text-lg font-bold font-mono text-rose-400 tabular-nums">
-                {activeV4.elementsEmptyCount} Elemen
-              </div>
-            </div>
-            <XCircle className="w-5 h-5 text-rose-500/60" />
+          <div className="text-[11px] text-slate-300 font-medium mt-1">
+            Kategori: <strong className="text-white">{activeV7.kategoriDiperluas}</strong>
           </div>
-
-          <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
-            <div>
-              <div className="text-slate-400 text-[11px]">Status Skema</div>
-              <div className="text-sm font-bold font-mono text-cyan-400 uppercase">
-                {activeFormat}
-              </div>
-            </div>
-            <Layers className="w-5 h-5 text-cyan-500/60" />
-          </div>
-
-          <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 flex items-center justify-between col-span-2 sm:col-span-1">
-            <div>
-              <div className="text-slate-400 text-[11px]">Ekstensi E27–E32</div>
-              <div className="text-sm font-bold font-mono text-slate-300">
-                {report.skorEkstensiV4 !== null && report.skorEkstensiV4 !== undefined
-                  ? `${report.skorEkstensiV4.toFixed(1)}%`
-                  : 'N/A (Bukan ISO)'}
-              </div>
-            </div>
-            <Sparkles className="w-5 h-5 text-cyan-400" />
-          </div>
+          <div className="text-[10px] text-slate-500 mt-0.5">3 Tingkat (1, 0.5, 0)</div>
         </div>
 
-        {/* Note on Chairman Decision regarding Export Core Score */}
-        <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 text-[11px] text-slate-400 flex items-start gap-2">
-          <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
-          <span>
-            <strong>Transparansi Penilaian (Excel v4 Acuan_Uji_Aplikasi):</strong> Kolom skor utama masih membutuhkan keputusan ketua tim. Aplikasi menampilkan ketiga skor utama (Skor A, MQI Biner, MQI Diperluas) secara berdampingan tanpa mengubah atau menyembunyikan rumus perhitungannya.
-          </span>
+        {/* MQI Ketat (32 Elemen) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md">
+          <div className="flex items-center justify-between text-slate-400 mb-1">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider">MQI Ketat (32)</span>
+            <ShieldCheck className="w-4 h-4 text-purple-400" />
+          </div>
+          <div className="text-3xl font-black font-mono text-purple-300 tabular-nums">
+            {activeV7.mqiKetat.toFixed(1)}
+            <span className="text-sm font-normal text-slate-400 ml-1">%</span>
+          </div>
+          <div className="text-[11px] text-slate-300 font-medium mt-1">
+            Hanya Nilai 1
+          </div>
+          <div className="text-[10px] text-slate-500 mt-0.5">Sensitivitas Ketat</div>
+        </div>
+
+        {/* Skor Inti (26 Elemen) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md">
+          <div className="flex items-center justify-between text-slate-400 mb-1">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider">Skor Inti (26)</span>
+            <Layers className="w-4 h-4 text-amber-400" />
+          </div>
+          <div className="text-3xl font-black font-mono text-amber-300 tabular-nums">
+            {activeV7.skorAInti.toFixed(1)}
+            <span className="text-sm font-normal text-slate-400 ml-1">%</span>
+          </div>
+          <div className="text-[11px] text-slate-300 font-medium mt-1">
+            MQI Inti: {activeV7.mqiDiperluasInti.toFixed(1)}%
+          </div>
+          <div className="text-[10px] text-slate-500 mt-0.5">Pembanding Paper Asli</div>
+        </div>
+
+        {/* Skor Ekstensi (E27–E32) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md">
+          <div className="flex items-center justify-between text-slate-400 mb-1">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider">Ekstensi (E27–E32)</span>
+            <FileSpreadsheet className="w-4 h-4 text-cyan-400" />
+          </div>
+          <div className="text-3xl font-black font-mono text-cyan-300 tabular-nums">
+            {activeV7.skorEkstensi.toFixed(1)}
+            <span className="text-sm font-normal text-slate-400 ml-1">%</span>
+          </div>
+          <div className="text-[11px] text-slate-300 font-medium mt-1">
+            Bobot: 11 poin
+          </div>
+          <div className="text-[10px] text-slate-500 mt-0.5">ISO 19115-3 / MDB</div>
         </div>
       </div>
 
-      {/* NAVIGATION TABS */}
-      <div className="flex items-center gap-1 border-b border-slate-800 overflow-x-auto pb-px">
+      {/* Diagnostics Strip: Item Counts & Status */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4 text-xs font-mono">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-1.5 text-emerald-400">
+            <CheckCircle2 className="w-4 h-4" />
+            <span>Nilai 1.0: <strong>{activeV7.countScore1}</strong></span>
+          </div>
+          <div className="flex items-center gap-1.5 text-amber-400">
+            <AlertCircle className="w-4 h-4" />
+            <span>Nilai 0.5: <strong>{activeV7.countScore05}</strong></span>
+          </div>
+          <div className="flex items-center gap-1.5 text-rose-400">
+            <XCircle className="w-4 h-4" />
+            <span>Nilai 0.0 (Kosong): <strong>{activeV7.countScore0}</strong></span>
+          </div>
+          <div className="flex items-center gap-1.5 text-cyan-400">
+            <Edit3 className="w-4 h-4" />
+            <span>Manual Override: <strong>{Object.keys(manualOverrides).length}</strong></span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {triggeredFlags.length > 0 ? (
+            <span className="px-2.5 py-1 rounded-lg bg-amber-950/80 border border-amber-800 text-amber-300 flex items-center gap-1.5 font-bold">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              <span>{triggeredFlags.length} Penanda Peringatan Terdeteksi</span>
+            </span>
+          ) : (
+            <span className="px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-800 text-emerald-300 flex items-center gap-1.5 font-bold">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>0 Penanda Peringatan</span>
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Tabs Navigation */}
+      <div className="border-b border-slate-800 flex items-center gap-2 overflow-x-auto">
         <button
-          onClick={() => setActiveTab('v4elements')}
-          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-all whitespace-nowrap flex items-center gap-2 ${
-            activeTab === 'v4elements'
-              ? 'border-cyan-400 text-cyan-400 bg-cyan-950/20'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
+          onClick={() => setActiveTab('v7elements')}
+          className={`py-3 px-4 text-xs font-bold transition-colors border-b-2 whitespace-nowrap flex items-center gap-2 ${
+            activeTab === 'v7elements'
+              ? 'border-cyan-400 text-cyan-300'
+              : 'border-transparent text-slate-400 hover:text-white'
           }`}
         >
-          <FileText className="w-3.5 h-3.5" />
-          <span>26 Elemen Inti (E01–E26)</span>
+          <Layers className="w-4 h-4" />
+          <span>32 Elemen Metadata (E01–E32)</span>
         </button>
 
         <button
           onClick={() => setActiveTab('manualReview')}
-          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-all whitespace-nowrap flex items-center gap-2 ${
+          className={`py-3 px-4 text-xs font-bold transition-colors border-b-2 whitespace-nowrap flex items-center gap-2 ${
             activeTab === 'manualReview'
-              ? 'border-cyan-400 text-cyan-400 bg-cyan-950/20'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
+              ? 'border-amber-400 text-amber-300'
+              : 'border-transparent text-slate-400 hover:text-white'
           }`}
         >
-          <Edit3 className="w-3.5 h-3.5 text-amber-400" />
-          <span>Penilaian Manual Auditor (7 Elemen)</span>
+          <Edit3 className="w-4 h-4 text-amber-400" />
+          <span>Penilaian Manual Auditor</span>
           {Object.keys(manualOverrides).length > 0 && (
-            <span className="w-2 h-2 rounded-full bg-cyan-400" />
+            <span className="px-1.5 py-0.2 rounded-full bg-amber-400/20 text-amber-300 text-[10px]">
+              {Object.keys(manualOverrides).length}
+            </span>
           )}
         </button>
 
         <button
           onClick={() => setActiveTab('emptyElements')}
-          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-all whitespace-nowrap flex items-center gap-2 ${
+          className={`py-3 px-4 text-xs font-bold transition-colors border-b-2 whitespace-nowrap flex items-center gap-2 ${
             activeTab === 'emptyElements'
-              ? 'border-cyan-400 text-cyan-400 bg-cyan-950/20'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
+              ? 'border-rose-400 text-rose-300'
+              : 'border-transparent text-slate-400 hover:text-white'
           }`}
         >
-          <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
-          <span>Elemen Kosong ({activeV4.emptyElements.length})</span>
+          <XCircle className="w-4 h-4 text-rose-400" />
+          <span>Elemen Perlu Diperbaiki ({activeV7.emptyElements.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('warnings')}
-          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-all whitespace-nowrap flex items-center gap-2 ${
+          className={`py-3 px-4 text-xs font-bold transition-colors border-b-2 whitespace-nowrap flex items-center gap-2 ${
             activeTab === 'warnings'
-              ? 'border-cyan-400 text-cyan-400 bg-cyan-950/20'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
+              ? 'border-amber-400 text-amber-300'
+              : 'border-transparent text-slate-400 hover:text-white'
           }`}
         >
-          <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-          <span>Penanda Mutu F01–F14 ({triggeredFlags.length})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('extensions')}
-          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-all whitespace-nowrap flex items-center gap-2 ${
-            activeTab === 'extensions'
-              ? 'border-cyan-400 text-cyan-400 bg-cyan-950/20'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-          <span>Ekstensi ISO 19115-3 (E27–E32)</span>
+          <AlertTriangle className="w-4 h-4 text-amber-400" />
+          <span>Penanda Mutu ({triggeredFlags.length})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('categories')}
-          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-all whitespace-nowrap flex items-center gap-2 ${
+          className={`py-3 px-4 text-xs font-bold transition-colors border-b-2 whitespace-nowrap flex items-center gap-2 ${
             activeTab === 'categories'
-              ? 'border-cyan-400 text-cyan-400 bg-cyan-950/20'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
+              ? 'border-cyan-400 text-cyan-300'
+              : 'border-transparent text-slate-400 hover:text-white'
           }`}
         >
-          <BarChart3 className="w-3.5 h-3.5 text-cyan-400" />
-          <span>Diagram &amp; 8 Kategori MQI</span>
+          <BarChart3 className="w-4 h-4" />
+          <span>Skor 8 Kategori &amp; Diagram</span>
         </button>
 
         <button
           onClick={() => setActiveTab('benchmarks')}
-          className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-all whitespace-nowrap flex items-center gap-2 ${
+          className={`py-3 px-4 text-xs font-bold transition-colors border-b-2 whitespace-nowrap flex items-center gap-2 ${
             activeTab === 'benchmarks'
-              ? 'border-cyan-400 text-cyan-400 bg-cyan-950/20'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
+              ? 'border-cyan-400 text-cyan-300'
+              : 'border-transparent text-slate-400 hover:text-white'
           }`}
         >
-          <FileSpreadsheet className="w-3.5 h-3.5 text-cyan-400" />
-          <span>Acuan Uji D01–D15</span>
+          <FileSpreadsheet className="w-4 h-4" />
+          <span>Matriks Acuan Uji (D01–D18)</span>
         </button>
 
-        {iso19115Compliance && (
+        <button
+          onClick={() => setActiveTab('config')}
+          className={`py-3 px-4 text-xs font-bold transition-colors border-b-2 whitespace-nowrap flex items-center gap-2 ${
+            activeTab === 'config'
+              ? 'border-cyan-400 text-cyan-300'
+              : 'border-transparent text-slate-400 hover:text-white'
+          }`}
+        >
+          <Settings className="w-4 h-4 text-slate-400" />
+          <span>Konfigurasi Aturan JSON</span>
+        </button>
+
+        {spatialData.hasAdequateSpatial && (
           <button
-            onClick={() => setActiveTab('iso19115')}
-            className={`px-4 py-2.5 text-xs font-semibold border-b-2 transition-all whitespace-nowrap flex items-center gap-2 ${
-              activeTab === 'iso19115'
-                ? 'border-cyan-400 text-cyan-400 bg-cyan-950/20'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
+            onClick={() => setActiveTab('map')}
+            className={`py-3 px-4 text-xs font-bold transition-colors border-b-2 whitespace-nowrap flex items-center gap-2 ${
+              activeTab === 'map'
+                ? 'border-cyan-400 text-cyan-300'
+                : 'border-transparent text-slate-400 hover:text-white'
             }`}
           >
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>Kepatuhan ISO 19115</span>
+            <MapPin className="w-4 h-4" />
+            <span>Peta Spasial</span>
           </button>
         )}
       </div>
 
-      {/* TAB 1: 26 ELEMEN INTI (E01–E26) */}
-      {activeTab === 'v4elements' && (
+      {/* Tab 1: 32 Elements Table */}
+      {activeTab === 'v7elements' && (
         <div className="space-y-4">
-          {/* Filters Bar */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-3">
-            <div className="relative flex-1 w-full md:w-auto">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          {/* Filter Bar */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 flex-1">
+              <Search className="w-4 h-4 text-slate-400 shrink-0" />
               <input
                 type="text"
+                placeholder="Cari elemen berdasarkan ID (misal: E04), nama, atau kategori..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Cari ID elemen (E01..E26), nama, atau kriteria..."
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-400"
               />
             </div>
 
-            <div className="flex items-center gap-2 w-full md:w-auto flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap">
               <select
                 value={selectedCategory}
                 onChange={e => setSelectedCategory(e.target.value)}
-                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-cyan-500"
+                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-slate-300 focus:outline-none focus:border-cyan-400"
               >
                 <option value="all">Semua Kategori (8)</option>
-                {Object.keys(CATEGORY_WEIGHTS_V4).map(catKey => (
-                  <option key={catKey} value={catKey}>
-                    {CATEGORY_WEIGHTS_V4[catKey as MQICategory].name}
-                  </option>
-                ))}
+                <option value="Informasi umum">Informasi umum</option>
+                <option value="Identifikasi">Identifikasi</option>
+                <option value="Deskripsi">Deskripsi</option>
+                <option value="Cakupan">Cakupan</option>
+                <option value="Ketelitian">Ketelitian</option>
+                <option value="Kontak">Kontak</option>
+                <option value="Meta-metadata">Meta-metadata</option>
+                <option value="Pemrosesan">Pemrosesan</option>
               </select>
 
               <select
-                value={selectedScoreFilter}
-                onChange={e => setSelectedScoreFilter(e.target.value)}
-                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-300 focus:outline-none focus:border-cyan-500"
+                value={selectedModeFilter}
+                onChange={e => setSelectedModeFilter(e.target.value)}
+                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-slate-300 focus:outline-none focus:border-cyan-400"
               >
-                <option value="all">Semua Nilai</option>
-                <option value="1">Nilai 1.0 (Memenuhi)</option>
-                <option value="0.5">Nilai 0.5 (Sebagian)</option>
-                <option value="0">Nilai 0.0 (Kosong)</option>
+                <option value="all">Semua Mode (O / U / M)</option>
+                <option value="M">Mode M (Wajib Manual)</option>
+                <option value="U">Mode U (Usulan Mesin)</option>
+                <option value="O">Mode O (Otomatis)</option>
               </select>
             </div>
           </div>
 
-          {/* Table of 26 Core Elements */}
-          <div className="overflow-x-auto border border-slate-800 rounded-xl bg-slate-900 shadow-xl">
+          {/* Table */}
+          <div className="overflow-x-auto border border-slate-800 rounded-xl bg-slate-900/60 shadow-lg">
             <table className="w-full text-xs text-left">
-              <thead className="bg-slate-950 text-slate-400 font-mono text-[11px] uppercase border-b border-slate-800">
+              <thead className="bg-slate-950/80 text-slate-400 font-mono text-[11px] border-b border-slate-800 uppercase">
                 <tr>
-                  <th className="py-3 px-4 w-16">ID</th>
-                  <th className="py-3 px-4">Nama Elemen</th>
+                  <th className="py-3 px-3">ID</th>
+                  <th className="py-3 px-3">Nama Elemen</th>
                   <th className="py-3 px-3">Kategori</th>
-                  <th className="py-3 px-3 text-center">Bobot</th>
-                  <th className="py-3 px-4">Teks Ekstraksi / Nilai Ditemukan</th>
+                  <th className="py-3 px-2 text-center">Bobot</th>
+                  <th className="py-3 px-2 text-center">Mode</th>
                   <th className="py-3 px-3 text-center">Nilai</th>
-                  <th className="py-3 px-3 text-center">Status</th>
-                  <th className="py-3 px-4">Alasan &amp; Rekomendasi</th>
-                  <th className="py-3 px-3 text-center">Aksi</th>
+                  <th className="py-3 px-3">Status Evaluasi</th>
+                  <th className="py-3 px-3">Alasan / Bukti Ekstraksi</th>
+                  <th className="py-3 px-3 text-right">Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/80">
                 {filteredElements.map(el => {
-                  const val = elementScores[el.id] ?? 0;
+                  const score = elementScores[el.id] ?? 0;
                   const isOverridden = manualOverrides[el.id] !== undefined;
-
-                  const badgeColor =
-                    val === 1
-                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                      : val === 0.5
-                      ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-                      : 'bg-rose-500/10 text-rose-400 border-rose-500/30';
+                  const mode = openDecisions.assessmentModes[el.id] || 'O';
 
                   return (
                     <tr key={el.id} className="hover:bg-slate-800/40 transition-colors">
-                      <td className="py-3 px-4 font-mono font-bold text-cyan-400">
+                      <td className="py-3 px-3 font-mono font-bold text-cyan-400 whitespace-nowrap">
                         {el.id}
+                        {!el.inti && (
+                          <span className="ml-1 text-[9px] px-1 rounded bg-purple-950 text-purple-300 border border-purple-800">
+                            ext
+                          </span>
+                        )}
                       </td>
-                      <td className="py-3 px-4 font-medium text-white max-w-[200px]">
-                        <div>{el.name}</div>
-                        <div className="text-[10px] text-slate-500 font-mono mt-0.5">{el.gmdPath}</div>
+                      <td className="py-3 px-3 font-medium text-white max-w-[200px]">
+                        {el.nama}
                       </td>
-                      <td className="py-3 px-3 text-slate-300 font-mono text-[11px]">
-                        {el.categoryName}
+                      <td className="py-3 px-3 text-slate-400 whitespace-nowrap">{el.kategori}</td>
+                      <td className="py-3 px-2 text-center font-mono font-bold text-amber-400">
+                        {el.bobot}
                       </td>
-                      <td className="py-3 px-3 text-center font-mono font-bold text-slate-200">
-                        {el.weight}
-                      </td>
-                      <td className="py-3 px-4 text-slate-300 font-mono text-[11px] max-w-[220px] truncate" title={el.definition}>
-                        {report.normalizedMetadata ? (
-                          <span>{el.id === 'E04' ? report.normalizedMetadata.title || '(Kosong)' : el.id === 'E07' ? report.normalizedMetadata.abstract?.slice(0, 80) || '(Kosong)' : el.definition}</span>
-                        ) : '(Kosong)'}
-                      </td>
-                      <td className="py-3 px-3 text-center font-mono">
-                        <span className={`px-2 py-0.5 rounded border text-xs font-bold ${badgeColor}`}>
-                          {val}
+                      <td className="py-3 px-2 text-center whitespace-nowrap">
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            mode === 'M'
+                              ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                              : mode === 'U'
+                              ? 'bg-cyan-950 text-cyan-300 border border-cyan-800'
+                              : 'bg-slate-800 text-slate-300'
+                          }`}
+                        >
+                          {mode}
                         </span>
                       </td>
-                      <td className="py-3 px-3 text-center">
+                      <td className="py-3 px-3 text-center font-mono font-bold text-base">
+                        <span
+                          className={`px-2.5 py-1 rounded-lg border ${
+                            score === 1
+                              ? 'bg-emerald-950/80 border-emerald-800 text-emerald-300'
+                              : score === 0.5
+                              ? 'bg-amber-950/80 border-amber-800 text-amber-300'
+                              : 'bg-rose-950/80 border-rose-800 text-rose-300'
+                          }`}
+                        >
+                          {score}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap">
                         {isOverridden ? (
-                          <span className="px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800 text-[10px] font-semibold">
-                            Manual
+                          <span className="text-amber-400 font-semibold flex items-center gap-1">
+                            <Edit3 className="w-3 h-3" />
+                            <span>Diverifikasi Auditor</span>
                           </span>
+                        ) : mode === 'M' ? (
+                          <span className="text-amber-300 font-medium">Menunggu Verifikasi</span>
+                        ) : mode === 'U' ? (
+                          <span className="text-cyan-300 font-medium">Usulan Mesin</span>
                         ) : (
-                          <span className="px-2 py-0.5 rounded bg-slate-950 text-slate-400 border border-slate-800 text-[10px]">
-                            Otomatis
-                          </span>
+                          <span className="text-slate-400 font-medium">Otomatis</span>
                         )}
                       </td>
-                      <td className="py-3 px-4 text-slate-400 text-[11px] leading-relaxed max-w-[260px]">
-                        {val === 1 ? (
-                          <span className="text-emerald-400">{el.criteria1}</span>
-                        ) : val === 0.5 ? (
-                          <span className="text-amber-400">{el.criteria05}</span>
+                      <td className="py-3 px-3 text-slate-300 max-w-xs text-[11px] leading-relaxed">
+                        {isOverridden && manualOverrides[el.id].notes ? (
+                          <div className="text-amber-300">
+                            <strong>Catatan:</strong> {manualOverrides[el.id].notes}
+                          </div>
                         ) : (
-                          <span className="text-rose-400">{el.criteria0}</span>
+                          <div>{score === 1 ? el.kriteria1 : score === 0.5 ? el.kriteria05 : el.kriteria0}</div>
                         )}
                       </td>
-                      <td className="py-3 px-3 text-center">
+                      <td className="py-3 px-3 text-right whitespace-nowrap">
                         <button
                           onClick={() => {
                             setActiveTab('manualReview');
                           }}
-                          className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] transition-colors"
-                          title="Tinjau dan sesuaikan skor secara manual"
+                          className="text-xs text-cyan-400 hover:text-cyan-300 font-medium hover:underline focus:outline-none"
                         >
-                          Ubah
+                          Telaah
                         </button>
                       </td>
                     </tr>
@@ -750,7 +788,7 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
         </div>
       )}
 
-      {/* TAB 2: PENILAIAN MANUAL AUDITOR */}
+      {/* Tab 2: Manual Review Panel */}
       {activeTab === 'manualReview' && (
         <ManualReviewPanel
           report={report}
@@ -761,320 +799,285 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
         />
       )}
 
-      {/* TAB 3: DAFTAR ELEMEN KOSONG (URUT BOBOT) */}
+      {/* Tab 3: Empty Elements List sorted by weight impact */}
       {activeTab === 'emptyElements' && (
-        <div className="space-y-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 lg:p-8 space-y-6">
+          <div className="flex items-center justify-between pb-4 border-b border-slate-800">
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <AlertCircle className="w-5 h-5 text-rose-400" />
-                <span>Daftar {activeV4.emptyElements.length} Elemen Metadata Bernilai Kosong (0.0)</span>
+                <XCircle className="w-5 h-5 text-rose-400" />
+                <span>Daftar Elemen Kosong (Nilai 0) — Diurutkan Berdasarkan Dampak Bobot</span>
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Diurutkan berdasarkan dampak bobotnya terhadap penurunan skor MQI (Bobot 3 Kritis dulu, lalu Bobot 2 Penting, lalu Bobot 1 Pendukung).
+                Sesuai handover final: Elemen berbobot 3 (kritis) diprioritaskan terlebih dahulu, diikuti bobot 2, lalu bobot 1.
               </p>
             </div>
-            <span className="px-3 py-1 rounded-full bg-rose-950/80 border border-rose-800 text-rose-300 font-mono text-xs font-bold">
-              Total {activeV4.emptyElements.length} Celah Mutu
+            <span className="px-3 py-1 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 font-mono font-bold text-xs">
+              {activeV7.emptyElements.length} Elemen Perlu Dilengkapi
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {activeV4.emptyElements.map((el, idx) => {
-              const ruleMeta = CORE_ELEMENTS_V4.find(r => r.id === el.id);
-              return (
+          {activeV7.emptyElements.length === 0 ? (
+            <div className="text-center py-10 bg-slate-950/60 rounded-xl border border-slate-800/80 text-emerald-400">
+              <CheckCircle2 className="w-10 h-10 mx-auto mb-2 text-emerald-400" />
+              <p className="font-semibold text-sm">Tidak ada elemen kosong! Seluruh 32 elemen terisi dan terverifikasi.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {activeV7.emptyElements.map(el => (
                 <div
                   key={el.id}
-                  className="bg-slate-900 border border-rose-900/40 rounded-xl p-4 space-y-3 relative overflow-hidden group hover:border-rose-700 transition-all shadow-md"
+                  className="p-4 bg-slate-950 border border-slate-800/80 rounded-xl space-y-2 hover:border-rose-900/60 transition-colors"
                 >
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="w-6 h-6 rounded-md bg-rose-950 text-rose-300 font-mono text-xs font-bold flex items-center justify-center border border-rose-800">
-                        {idx + 1}
-                      </span>
-                      <span className="font-mono font-bold text-sm text-white">{el.id}</span>
-                      <span className="text-xs text-slate-400 font-medium">({el.category})</span>
-                    </div>
-
+                    <span className="px-2 py-0.5 rounded bg-rose-950 text-rose-300 border border-rose-800 font-mono font-bold text-xs">
+                      {el.id}
+                    </span>
                     <span
-                      className={`text-xs font-mono font-bold px-2 py-0.5 rounded border ${
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
                         el.weight === 3
-                          ? 'bg-rose-950 text-rose-400 border-rose-800'
+                          ? 'bg-rose-950 text-rose-300 border border-rose-800'
                           : el.weight === 2
-                          ? 'bg-amber-950 text-amber-400 border-amber-800'
-                          : 'bg-slate-800 text-slate-300 border-slate-700'
+                          ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                          : 'bg-slate-800 text-slate-300'
                       }`}
                     >
-                      Bobot {el.weight} {el.weight === 3 ? '(Kritis)' : el.weight === 2 ? '(Penting)' : '(Pendukung)'}
+                      Bobot: {el.weight} {el.weight === 3 ? '(Kritis)' : el.weight === 2 ? '(Penting)' : '(Pendukung)'}
                     </span>
                   </div>
-
-                  <h3 className="text-xs font-bold text-slate-200">
-                    {el.name}
-                  </h3>
-
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    {ruleMeta?.definition}
-                  </p>
-
-                  <div className="pt-2 border-t border-slate-800 text-[11px] text-cyan-400/90 leading-relaxed">
-                    <strong className="text-cyan-300">Rekomendasi Pemenuhan:</strong> {ruleMeta?.criteria1}
-                  </div>
+                  <h4 className="text-sm font-bold text-white">{el.name}</h4>
+                  <div className="text-xs text-slate-400">{el.category}</div>
                 </div>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {/* TAB 4: PENANDA MUTU (F01–F14) */}
+      {/* Tab 4: Quality Flags F01–F14 */}
       {activeTab === 'warnings' && (
-        <div className="space-y-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 lg:p-8 space-y-6">
+          <div className="flex items-center justify-between pb-4 border-b border-slate-800">
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
                 <AlertTriangle className="w-5 h-5 text-amber-400" />
-                <span>Peringatan dan Penanda Mutu Metadata (F01–F14)</span>
+                <span>Penanda Kualitas Metadata (F01–F14)</span>
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Berdasarkan sheet Penanda KOMPAS Excel v4: Dilaporkan terpisah dari skor MQI untuk transparansi audit.
+                Dilaporkan terpisah dari skor MQI untuk transparansi penuh audit
               </p>
             </div>
-            <span className="px-3 py-1 rounded-full bg-amber-950/80 border border-amber-800 text-amber-300 font-mono text-xs font-bold">
-              {triggeredFlags.length} Peringatan Terdeteksi
+            <span className="px-3 py-1 rounded-xl bg-amber-950/80 border border-amber-800 text-amber-300 font-mono font-bold text-xs">
+              {triggeredFlags.length} Terdeteksi Aktif
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {(Object.keys(QUALITY_FLAGS_DEFINITIONS) as QualityFlagResult['id'][]).map(flagId => {
-              const flagDef = QUALITY_FLAGS_DEFINITIONS[flagId];
-              const result = (report.qualityFlags || []).find(f => f.id === flagId);
-              const isTriggered = result?.isTriggered ?? false;
-
-              return (
-                <div
-                  key={flagId}
-                  className={`p-4 rounded-xl border transition-all ${
-                    isTriggered
-                      ? 'bg-slate-900/90 border-amber-500/60 shadow-lg shadow-amber-950/20 ring-1 ring-amber-500/30'
-                      : 'bg-slate-950/50 border-slate-800/80 opacity-70'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`font-mono font-bold text-xs px-2 py-0.5 rounded border ${
-                          isTriggered
-                            ? 'bg-amber-950 text-amber-300 border-amber-800'
-                            : 'bg-slate-900 text-slate-500 border-slate-800'
-                        }`}
-                      >
-                        {flagId}
-                      </span>
-                      <span className={`text-xs font-semibold ${isTriggered ? 'text-white' : 'text-slate-400'}`}>
-                        {flagDef.name}
-                      </span>
-                    </div>
-
+          <div className="space-y-3">
+            {report.qualityFlags?.map(flag => (
+              <div
+                key={flag.id}
+                className={`p-4 rounded-xl border transition-colors ${
+                  flag.isTriggered
+                    ? 'bg-amber-950/20 border-amber-800/80 text-amber-300'
+                    : 'bg-slate-950/60 border-slate-800 text-slate-500 opacity-60'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2">
                     <span
-                      className={`text-[10px] font-mono px-2 py-0.5 rounded ${
-                        isTriggered
-                          ? 'bg-amber-500/20 text-amber-400 font-bold'
-                          : 'bg-slate-800 text-slate-500'
+                      className={`px-2 py-0.5 rounded font-mono font-bold text-xs ${
+                        flag.isTriggered
+                          ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                          : 'bg-slate-800 text-slate-400'
                       }`}
                     >
-                      {isTriggered ? 'Terdeteksi' : 'Aman'}
+                      {flag.id}
                     </span>
+                    <h4 className="text-sm font-bold text-white">{flag.name}</h4>
                   </div>
-
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    {flagDef.description}
-                  </p>
-
-                  {isTriggered && result?.evidence && (
-                    <div className="mt-3 p-2.5 rounded-lg bg-amber-950/30 border border-amber-900/50 text-[11px] text-amber-200/90 font-mono">
-                      <strong>Bukti Temuan:</strong> {result.evidence}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* TAB 5: EKSTENSI ISO 19115-3 (E27–E32) */}
-      {activeTab === 'extensions' && (
-        <div className="space-y-6">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-cyan-400" />
-                  <span className="text-xs font-mono font-bold text-cyan-400 uppercase tracking-wide">
-                    Elemen Tambahan (E27–E32)
+                  <span className="text-xs font-mono">
+                    {flag.isTriggered ? (
+                      <span className="text-amber-400 font-bold">TERDETEKSI</span>
+                    ) : (
+                      <span>TIDAK AKTIF</span>
+                    )}
                   </span>
                 </div>
-                <h3 className="text-base font-bold text-white mt-1">
-                  6 Elemen Ekstensi ISO 19115-3 (Panduan BIG v6)
-                </h3>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono px-2.5 py-1 rounded bg-slate-950 text-slate-300 border border-slate-800">
-                  Status Skema: <strong className="text-cyan-400 uppercase">{activeFormat}</strong>
-                </span>
-                <span className="text-xs font-mono px-2.5 py-1 rounded bg-slate-950 text-slate-300 border border-slate-800">
-                  Skor Ekstensi: <strong className="text-emerald-400">{report.skorEkstensiV4 !== null && report.skorEkstensiV4 !== undefined ? `${report.skorEkstensiV4.toFixed(1)}%` : 'N/A'}</strong>
-                </span>
-              </div>
-            </div>
-
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Sesuai sheet Checklist dan Handover Revisi 29 Okt: Keenam elemen ini dicantumkan dalam Checklist tetapi belum dimasukkan ke perhitungan MQI utama (E01–E26 tetap 26 elemen agar sebanding dengan paper). Jalur padanan gmd ada di Checklist kolom H.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {EXTENSION_ELEMENTS_V4.map(el => {
-              const extRes = report.extensionElementsResults?.find(x => x.elementId === el.id);
-              const scoreVal = extRes?.scoreValue ?? 0;
-              return (
-                <div
-                  key={el.id}
-                  className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono font-bold text-xs text-cyan-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
-                      {el.id} (Bobot {el.weight})
-                    </span>
-                    <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-950 text-slate-300 border border-slate-800">
-                      Nilai: {scoreVal}
-                    </span>
+                <p className="text-xs text-slate-400">{flag.description}</p>
+                {flag.isTriggered && flag.evidence && (
+                  <div className="mt-2 text-xs font-mono text-amber-300 bg-amber-950/40 p-2.5 rounded border border-amber-900/60">
+                    <strong>Bukti:</strong> {flag.evidence}
                   </div>
-                  <h4 className="text-xs font-bold text-white">{el.name}</h4>
-                  <p className="text-xs text-slate-400 leading-relaxed">{el.definition}</p>
-                  <div className="text-[11px] font-mono text-cyan-400 bg-slate-950 p-2 rounded border border-slate-800">
-                    Jalur mdb: {el.mdbPath}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* TAB 6: DIAGRAM & 8 KATEGORI */}
-      {activeTab === 'categories' && (
-        <div className="space-y-6">
-          <AuditComparisonBarChart report={report} />
-        </div>
-      )}
-
-      {/* TAB 7: ACUAN UJI D01–D15 */}
-      {activeTab === 'benchmarks' && (
-        <div className="space-y-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <FileSpreadsheet className="w-5 h-5 text-cyan-400" />
-                <span>Acuan Uji Aplikasi D01–D15 (Sheet Acuan_Uji_Aplikasi)</span>
-              </h2>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Nilai acuan deterministik resmi 15 dataset kelautan Indonesia dari Excel v4.
-              </p>
-            </div>
-            <button
-              onClick={() => setIsBenchmarkModalOpen(true)}
-              className="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-slate-950 text-xs font-bold transition-colors"
-            >
-              Buka Matriks Lengkap
-            </button>
-          </div>
-
-          <div className="overflow-x-auto border border-slate-800 rounded-xl bg-slate-900">
-            <table className="w-full text-xs text-left">
-              <thead className="bg-slate-950 text-slate-400 font-mono text-[11px] uppercase border-b border-slate-800">
-                <tr>
-                  <th className="py-2.5 px-3">ID</th>
-                  <th className="py-2.5 px-3">Judul Dataset</th>
-                  <th className="py-2.5 px-3">Sumber</th>
-                  <th className="py-2.5 px-3">Format</th>
-                  <th className="py-2.5 px-3 text-right">Skor A</th>
-                  <th className="py-2.5 px-3 text-right">MQI Biner</th>
-                  <th className="py-2.5 px-3 text-right">MQI Diperluas</th>
-                  <th className="py-2.5 px-3">Kategori</th>
-                  <th className="py-2.5 px-3 text-center">Kosong</th>
-                  <th className="py-2.5 px-3 text-center">Aksi</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/80">
-                {BENCHMARK_DATASETS_V4.map(ds => (
-                  <tr key={ds.id} className="hover:bg-slate-800/40 transition-colors">
-                    <td className="py-2.5 px-3 font-mono font-bold text-cyan-400">{ds.id}</td>
-                    <td className="py-2.5 px-3 font-medium text-white max-w-[240px] truncate" title={ds.title}>
-                      {ds.title}
-                    </td>
-                    <td className="py-2.5 px-3 text-slate-400">{ds.sourceGroup}</td>
-                    <td className="py-2.5 px-3 font-mono uppercase">{ds.format}</td>
-                    <td className="py-2.5 px-3 font-mono text-right font-bold text-white">
-                      {ds.expectedSkorA.toFixed(1)}
-                    </td>
-                    <td className="py-2.5 px-3 font-mono text-right text-purple-400">
-                      {ds.expectedMqiBiner.toFixed(1)}%
-                    </td>
-                    <td className="py-2.5 px-3 font-mono text-right font-bold text-cyan-400">
-                      {ds.expectedMqiDiperluas.toFixed(1)}%
-                    </td>
-                    <td className="py-2.5 px-3 font-mono text-[11px]">
-                      {ds.expectedKategoriDiperluas}
-                    </td>
-                    <td className="py-2.5 px-3 font-mono text-center text-rose-400 font-bold">
-                      {ds.emptyElementsCount}
-                    </td>
-                    <td className="py-2.5 px-3 text-center">
-                      <button
-                        onClick={() => handleLoadBenchmarkDataset(ds)}
-                        className="px-2 py-1 rounded bg-cyan-600 hover:bg-cyan-500 text-slate-950 text-[11px] font-bold transition-colors"
-                      >
-                        Muat
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 8: ISO 19115 CORE COMPLIANCE */}
-      {activeTab === 'iso19115' && iso19115Compliance && (
-        <div className="space-y-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
-            <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5 text-emerald-400" />
-              <span>13 Elemen Metadata Inti ISO 19115 (SNI ISO 19115:2012)</span>
-            </h3>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              {iso19115Compliance.summaryNotes} Menguji kepatuhan terhadap elemen wajib minimal agar metadata dapat terindeks secara legal pada katalog geospasial nasional dan internasional.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {iso19115Compliance.elements.map(el => (
-              <div key={el.code} className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-xs font-bold text-cyan-400">{el.code}</span>
-                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${el.status === 'terpenuhi' ? 'bg-emerald-950 text-emerald-300' : 'bg-rose-950 text-rose-300'}`}>
-                    {el.status === 'terpenuhi' ? 'Terpenuhi' : 'Tidak Terpenuhi'}
-                  </span>
-                </div>
-                <div className="text-xs font-bold text-white">{el.nameId}</div>
-                <div className="text-[11px] text-slate-400">{el.details}</div>
+                )}
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Tab 5: Categories Diagram & Breakdown */}
+      {activeTab === 'categories' && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 lg:p-8 space-y-6">
+          <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <BarChart3 className="w-5 h-5 text-cyan-400" />
+                <span>Diagram &amp; Profil Mutu 8 Kategori MQI (Hasara 2026 / KOMPAS v7)</span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Fraksi kelengkapan parameter terdistribusi pada 8 kelompok informasi
+              </p>
+            </div>
+          </div>
+
+          <AuditComparisonBarChart
+            report={{
+              ...report,
+              scoreReport: {
+                ...report.scoreReport,
+                adaptedScore: activeV7.skorA,
+                originalScore: activeV7.mqiBiner,
+              },
+              v7Scoring: activeV7,
+            }}
+          />
+        </div>
+      )}
+
+      {/* Tab 6: Benchmarks Explorer (D01–D18) */}
+      {activeTab === 'benchmarks' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-bold text-white">Acuan Uji 15 Dataset Resmi (v7-2026-10-31)</h3>
+            <button
+              onClick={() => setIsBenchmarkModalOpen(true)}
+              className="px-3 py-1.5 text-xs font-semibold text-slate-900 bg-cyan-400 hover:bg-cyan-300 rounded-lg transition-colors flex items-center gap-1.5 shadow"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Buka Matriks Lengkap D01–D18</span>
+            </button>
+          </div>
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 text-xs text-slate-400 leading-relaxed">
+            Data acuan pengujian dibaca langsung dari berkas <strong className="text-cyan-300 font-mono">KOMPAS_aturan_dan_acuan_v7.json</strong>.
+            Anda dapat memuat dataset patokan mana pun ke dalam antarmuka audit dengan mengeklik tombol &quot;Buka Matriks Lengkap D01–D18&quot;.
+          </div>
+        </div>
+      )}
+
+      {/* Tab 7: Configuration Manager (JSON v7 / v8 & Open Decisions) */}
+      {activeTab === 'config' && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 lg:p-8 space-y-6">
+          <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <Settings className="w-5 h-5 text-cyan-400" />
+                <span>Pengelolaan Konfigurasi Aturan JSON &amp; Keputusan Terbuka</span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Memenuhi Prinsip B &amp; L: Konfigurasi dinamis tanpa hardcode nilai di kode program
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                resetToDefaultConfig();
+                setConfigUploadSuccess('Konfigurasi dikembalikan ke default v7-2026-10-31.');
+                setConfigUploadError(null);
+              }}
+              className="px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors flex items-center gap-1.5 border border-slate-700"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Reset ke Default v7</span>
+            </button>
+          </div>
+
+          {configUploadError && (
+            <div className="p-3 rounded-lg bg-rose-950/80 border border-rose-800 text-rose-300 text-xs">
+              {configUploadError}
+            </div>
+          )}
+          {configUploadSuccess && (
+            <div className="p-3 rounded-lg bg-emerald-950/80 border border-emerald-800 text-emerald-300 text-xs">
+              {configUploadSuccess}
+            </div>
+          )}
+
+          {/* JSON Upload Box */}
+          <div className="p-5 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+            <h4 className="text-sm font-bold text-white flex items-center gap-2">
+              <UploadCloud className="w-4 h-4 text-cyan-400" />
+              <span>Unggah Berkas Aturan JSON Baru (v8 atau revisi v7)</span>
+            </h4>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Jika tim menerbitkan <code className="text-cyan-300 font-mono">KOMPAS_aturan_dan_acuan_v8.json</code>, cukup unggah berkas tersebut di sini.
+              Aplikasi akan memvalidasi skema secara otomatis dan memperbarui seluruh bobot, ambang, kodean, dan acuan uji tanpa perlu mengubah kode sumber kalkulasi.
+            </p>
+            <input
+              type="file"
+              accept=".json"
+              onChange={handleConfigUpload}
+              className="text-xs text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-cyan-500/20 file:text-cyan-300 hover:file:bg-cyan-500/30 cursor-pointer"
+            />
+          </div>
+
+          {/* Open Decisions Form */}
+          <div className="p-5 bg-slate-950 border border-slate-800 rounded-xl space-y-4 text-xs">
+            <h4 className="text-sm font-bold text-white">Pengaturan Keputusan Terbuka (Bagian 17):</h4>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-3 bg-slate-900 border border-slate-800 rounded-lg space-y-2">
+                <label className="font-semibold text-slate-300 block">
+                  Strategi Blok Kontak (E19/E20):
+                </label>
+                <select
+                  value={openDecisions.contactBlockStrategy}
+                  onChange={e => updateOpenDecisions({ contactBlockStrategy: e.target.value as any })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200"
+                >
+                  <option value="best_block">Usulan Ketua: Ambil blok terbaik (prioritas institusional)</option>
+                  <option value="first_block">Pilihan Alternatif: Ambil blok kontak pertama</option>
+                </select>
+                <p className="text-[11px] text-slate-500">
+                  Jika ada blok kontak placeholder, penanda F06 tetap diaktifkan.
+                </p>
+              </div>
+
+              <div className="p-3 bg-slate-900 border border-slate-800 rounded-lg space-y-2">
+                <label className="font-semibold text-slate-300 block">
+                  Nilai Awal Elemen Manual Mode M (Usulan):
+                </label>
+                <select
+                  value={openDecisions.initialManualValue}
+                  onChange={e => updateOpenDecisions({ initialManualValue: parseFloat(e.target.value) })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200"
+                >
+                  <option value="0.5">Nilai 0.5 (Usulan default jika teks terisi)</option>
+                  <option value="0">Nilai 0.0 (Harus dinilai eksplisit oleh auditor)</option>
+                </select>
+                <p className="text-[11px] text-slate-500">
+                  Dapat dikonfigurasi fleksibel tanpa mengunci aturan dalam kode.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab 8: Spatial Map */}
+      {activeTab === 'map' && spatialData.hasAdequateSpatial && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 lg:p-8 space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <MapPin className="w-5 h-5 text-cyan-400" />
+              <span>Verifikasi Spasial Geometris &amp; Bounding Box</span>
+            </h2>
+            <span className="text-xs font-mono text-slate-400">
+              CRS: {spatialData.crsName}
+            </span>
+          </div>
+          <OpenStreetMapViewer
+            spatialData={spatialData}
+            datasetTitle={activeDatasetTitle}
+          />
         </div>
       )}
     </div>

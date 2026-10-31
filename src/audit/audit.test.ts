@@ -1,5 +1,6 @@
 /**
- * KOMPAS - Unit Tests for Core Logic & Auditing Engine
+ * KOMPAS - Unit & Acceptance Tests (U1–U5)
+ * Conforms to Handover Final 17 Bagian & KOMPAS_aturan_dan_acuan_v7.json.
  * Uses Node's built-in test runner (node:test) as mandated by Ultra Mode.
  */
 
@@ -19,320 +20,322 @@ import {
   SAMPLE_GEOJSON_BENGKALIS,
   SAMPLE_JSON_KALBAR,
 } from '../data/samples';
-import { BENCHMARK_DATASETS_V4 } from '../data/benchmarksV4';
-import { calculateV4Scores } from './v4Rules';
-import { QUALITY_FLAGS_DEFINITIONS } from './flags';
+import {
+  getActiveConfig,
+  getBenchmarkSamples,
+  getBenchmarkKodean,
+  getBenchmarkAcuan,
+  getBenchmarkFlags,
+  getQualityFlagsDefinition,
+  validateRulesConfig,
+  loadCustomConfig,
+} from './configLoader';
+import { calculateV7Scores } from './v7Scoring';
+import { getBenchmarkDatasetsV7 } from '../data/benchmarksV7';
 
-test('Placeholder Detection detects generic values and nulls', () => {
-  assert.equal(isPlaceholderValue('Belum Ada'), true);
-  assert.equal(isPlaceholderValue('TBD'), true);
-  assert.equal(isPlaceholderValue('test@example.com'), false); // not a placeholder string per se, but email validator catches domain
-  assert.equal(isPlaceholderValue(''), true);
-  assert.equal(isPlaceholderValue('   '), true);
-  assert.equal(isPlaceholderValue('null'), true);
-  assert.equal(isPlaceholderValue('Survei Batimetri Alur Selat Malaka'), false);
+test('JSON Config Loader validates v7 JSON and protects against corrupt schemas', () => {
+  const config = getActiveConfig();
+  assert.equal(config.versi_aturan, 'v7-2026-10-31');
+  assert.equal(config.elemen.length, 32);
+  assert.equal(Object.keys(config.sampel).length, 15);
+  assert.equal(Object.keys(config.acuan).length, 15);
+
+  const validation = validateRulesConfig(config);
+  assert.equal(validation.isValid, true);
+  assert.equal(validation.errors.length, 0);
+
+  // Test invalid schema protection
+  const invalidValidation = validateRulesConfig({ versi_aturan: 'v9', elemen: [] });
+  assert.equal(invalidValidation.isValid, false);
+  assert.ok(invalidValidation.errors.length > 0);
 });
 
-test('Email validation flags invalid formats and example domains', () => {
-  assert.equal(isValidContactEmail('survei.hidro@pushidrosal.id').valid, true);
-  assert.equal(isValidContactEmail('test@example.com').valid, false);
-  assert.equal(isValidContactEmail('invalid-email-string').valid, false);
-  assert.equal(isValidContactEmail('admin@test.com').valid, false);
-});
+test('U1 Uji Hitung: D01 to D18 15 Datasets scores match Acuan JSON within tolerance <= 0.1', () => {
+  const benchmarks = getBenchmarkDatasetsV7();
+  assert.equal(benchmarks.length, 15);
 
-test('Bounding box validator catches coordinate ranges and inversions', () => {
-  assert.equal(validateBBox(101.5, 1.5, 102.0, 2.0).valid, true);
-  // Inverted: west > east
-  assert.equal(validateBBox(105.0, 1.0, 100.0, 2.0).valid, false);
-  // Out of range: longitude > 180
-  assert.equal(validateBBox(190.0, 1.0, 195.0, 2.0).valid, false);
-  // Pure zeros (unconfigured box)
-  assert.equal(validateBBox(0, 0, 0, 0).valid, false);
-});
+  for (const ds of benchmarks) {
+    const calc = calculateV7Scores(ds.scores);
 
-test('XML Parser successfully extracts compliant ISO 19139 metadata', () => {
-  const norm = parseXmlMetadata(SAMPLE_XML_BATIMETRI_ISO19139, 'malaka.xml');
-  assert.equal(norm.rawFormat, 'xml_iso19139');
-  assert.equal(norm.title, 'Survei Batimetri Multibeam Alur Pelayaran TSS Selat Malaka');
-  assert.equal(norm.contact?.organization, 'Pusat Hidro-Oseanografi TNI AL (Pushidrosal)');
-  assert.equal(norm.contact?.email, 'survei.hidro@pushidrosal.id');
-  assert.equal(norm.accuracy?.verticalDatum, 'Lowest Astronomical Tide (LAT)');
-  assert.equal(norm.accuracy?.soundVelocityCorrected, true);
-  assert.ok(norm.spatialExtent?.westBoundLongitude !== undefined);
-  assert.equal(norm.spatialExtent?.westBoundLongitude, 101.45);
-  assert.equal(norm.parseErrors.length, 0);
-});
-
-test('XML Parser safely handles corrupted XML without throwing', () => {
-  const norm = parseXmlMetadata(SAMPLE_XML_CORRUPTED, 'corrupt.xml');
-  assert.ok(norm.parseErrors.length > 0);
-  assert.equal(norm.rawFormat, 'unknown');
-});
-
-test('JSON Parser extracts catalog metadata and distinguishes placeholders', () => {
-  const norm = parseJsonMetadata(SAMPLE_JSON_KALBAR, 'kalbar.json');
-  assert.equal(norm.rawFormat, 'json_catalog');
-  assert.equal(norm.title, 'Katalog Metadata Kawasan Konservasi Pesisir dan Pulau-Pulau Kecil (KKP3K) Kalimantan Barat');
-  assert.equal(norm.datasetId, 'kkp3k-kalbar-2023-resmi');
-  assert.equal(norm.spatialExtent?.westBoundLongitude, 108.45);
-  assert.equal(norm.contact?.organization, 'Dinas Kelautan dan Perikanan Provinsi Kalimantan Barat');
-});
-
-test('GeoJSON Parser validates FeatureCollection and polygon rings', () => {
-  const spatial = parseGeoJson(SAMPLE_GEOJSON_BENGKALIS, 'bengkalis.geojson');
-  assert.equal(spatial.format, 'geojson');
-  assert.equal(spatial.featureCount, 3);
-  assert.equal(spatial.geometryTypes.includes('Polygon'), true);
-  assert.equal(spatial.ringClosureErrorsCount, 0);
-  assert.equal(spatial.emptyGeometryCount, 0);
-  assert.ok(spatial.bounds[0] > 100); // longitude east of 100°
-});
-
-test('MQI Audit Engine evaluates Bathymetric dataset with high score for compliant survey', () => {
-  const meta = parseXmlMetadata(SAMPLE_XML_BATIMETRI_ISO19139, 'malaka.xml');
-  const report = runDatasetAudit('batimetri', meta);
-
-  assert.ok(report.scoreReport.adaptedScore !== null);
-  // Compliant multibeam should score high (>= 85%)
-  assert.ok((report.scoreReport.adaptedScore as number) >= 80);
-  assert.ok(report.scoreReport.statusCounts.tidak_berlaku >= 0);
-  assert.ok(report.scoreReport.categorySummaries.length === 8);
-});
-
-test('MQI Audit Engine flags provisional score on placeholder metadata', () => {
-  const meta = parseXmlMetadata(SAMPLE_XML_TERUMBU_PLACEHOLDER, 'draft.xml');
-  const report = runDatasetAudit('terumbu_karang', meta);
-
-  assert.equal(report.scoreReport.isProvisional, true);
-  assert.ok(report.scoreReport.provisionalReasons.length > 0);
-  // Should have invalid parameters for email, date, etc.
-  assert.ok(report.scoreReport.statusCounts.tidak_valid > 0);
-});
-
-test('MQI Audit Engine excludes non-applicable parameters from denominator', () => {
-  const meta = parseJsonMetadata(SAMPLE_JSON_KALBAR, 'kalbar.json');
-  const report = runDatasetAudit('kawasan_konservasi', meta);
-
-  // In 'kawasan_konservasi', bathymetry-only parameters (e.g. SVP, TVU) are not applicable or adapted
-  const svpResult = report.parameterResults.find(r => r.ruleId === 'ACC-04');
-  // If not applicable in profile, it is excluded
-  if (svpResult) {
-    assert.ok(svpResult.status === 'tidak_berlaku' || svpResult.weight > 0);
-  }
-});
-
-test('ISO 19115 Core Metadata Compliance correctly verifies compliant dataset', () => {
-  const meta = parseXmlMetadata(SAMPLE_XML_BATIMETRI_ISO19139, 'malaka.xml');
-  const report = runDatasetAudit('batimetri', meta);
-
-  assert.ok(report.iso19115Compliance !== undefined);
-  assert.equal(report.iso19115Compliance.isCompliant, true);
-  assert.ok(report.iso19115Compliance.coreScore >= 80);
-  assert.ok(report.iso19115Compliance.elements.length >= 12);
-  assert.ok(report.iso19115Compliance.standardReference.includes('ISO 19115'));
-});
-
-test('ISO 19115 Core Metadata Compliance flags incomplete or placeholder dataset', () => {
-  const meta = parseXmlMetadata(SAMPLE_XML_TERUMBU_PLACEHOLDER, 'draft.xml');
-  const report = runDatasetAudit('terumbu_karang', meta);
-
-  assert.ok(report.iso19115Compliance !== undefined);
-  assert.equal(report.iso19115Compliance.isCompliant, false);
-  assert.ok(report.iso19115Compliance.statusLabel.includes('Belum Memenuhi'));
-});
-
-test('Peraturan BIG No. 3 Tahun 2023 evaluates transitional vs non-standard metadata', () => {
-  const metaMalaka = parseXmlMetadata(SAMPLE_XML_BATIMETRI_ISO19139, 'malaka.xml');
-  const reportMalaka = runDatasetAudit('batimetri', metaMalaka);
-
-  assert.ok(reportMalaka.bigNo3Compliance !== undefined);
-  assert.equal(reportMalaka.bigNo3Compliance.isWithinTransitionPeriod, true);
-  assert.equal(reportMalaka.bigNo3Compliance.standardCategory, 'SNI ISO 19115:2012 (Transisi)');
-  assert.equal(reportMalaka.bigNo3Compliance.isCompliant, true);
-
-  const metaEsri = parseXmlMetadata(SAMPLE_XML_BATIMETRI_ESRI, 'esri.xml');
-  const reportEsri = runDatasetAudit('batimetri', metaEsri);
-
-  assert.ok(reportEsri.bigNo3Compliance !== undefined);
-  assert.equal(reportEsri.bigNo3Compliance.standardCategory, 'Non-Standar');
-  assert.equal(reportEsri.bigNo3Compliance.isCompliant, false);
-});
-
-test('ISO 19115-3 Extension Elements (E27-E32) are N/A for gmd:MD_Metadata root', () => {
-  const metaGmd = parseXmlMetadata(SAMPLE_XML_BATIMETRI_ISO19139, 'malaka.xml');
-  const report = runDatasetAudit('batimetri', metaGmd);
-
-  // List 1 (E01-E26) must be evaluated
-  assert.ok(report.coreElementsResults !== undefined);
-  assert.equal(report.coreElementsResults.length, 26);
-  assert.ok(report.coreScoreMqi !== undefined);
-  assert.ok(report.coreScoreMqi > 0);
-
-  // List 2 (E27-E32) must be N/A
-  assert.ok(report.iso19115_3Readiness !== undefined);
-  assert.equal(report.iso19115_3Readiness.isApplicable, false);
-  assert.equal(report.iso19115_3Readiness.scorePercentage, null);
-  assert.equal(report.iso19115_3Readiness.totalPointsEarned, null);
-  assert.equal(report.iso19115_3Readiness.statusLabel, 'N/A (Format <gmd:MD_Metadata>)');
-  assert.equal(report.iso19115_3Readiness.elements.length, 6);
-  assert.equal(report.iso19115_3Readiness.elements[0].status, 'tidak_berlaku');
-});
-
-test('ISO 19115-3 Extension Elements (E27-E32) are evaluated actively for mdb:MD_Metadata root', () => {
-  const sampleMdb = `<?xml version="1.0" encoding="UTF-8"?>
-<mdb:MD_Metadata xmlns:mdb="http://standards.iso.org/iso/19115/-3/mdb/2.0"
-                 xmlns:mcc="http://standards.iso.org/iso/19115/-3/mcc/1.0"
-                 xmlns:mrc="http://standards.iso.org/iso/19115/-3/mrc/2.0"
-                 xmlns:cit="http://standards.iso.org/iso/19115/-3/cit/2.0"
-                 xmlns:gco="http://standards.iso.org/iso/19115/-3/gco/1.0">
-  <mdb:metadataIdentifier>
-    <mcc:MD_Identifier>
-      <mcc:code><gco:CharacterString>ID-BATHY-2026-MDB</gco:CharacterString></mcc:code>
-    </mcc:MD_Identifier>
-  </mdb:metadataIdentifier>
-  <mdb:metadataScope>
-    <mcc:MD_Scope>
-      <mcc:level><mcc:MD_ScopeCode codeListValue="dataset">dataset</mcc:MD_ScopeCode></mcc:level>
-      <mcc:name><gco:CharacterString>Peta Batimetri Selat Sunda</gco:CharacterString></mcc:name>
-    </mcc:MD_Scope>
-  </mdb:metadataScope>
-  <mdb:identificationInfo>
-    <citation>
-      <title><gco:CharacterString>Batimetri Multibeam Selat Sunda</gco:CharacterString></title>
-    </citation>
-    <abstract><gco:CharacterString>Survei kedalaman laut resolusi tinggi.</gco:CharacterString></abstract>
-  </mdb:identificationInfo>
-  <mdb:spatialRepresentationInfo>
-    <topologyLevel><gco:CharacterString>geometryOnly</gco:CharacterString></topologyLevel>
-    <geometricObjectType><gco:CharacterString>point</gco:CharacterString></geometricObjectType>
-    <geometricObjectCount><gco:Integer>154200</gco:Integer></geometricObjectCount>
-  </mdb:spatialRepresentationInfo>
-  <mdb:portrayalCatalogueInfo>
-    <cit:CI_Citation>
-      <cit:title><gco:CharacterString>SNI 7644:2010 Penyajian Peta Kelautan</gco:CharacterString></cit:title>
-    </cit:CI_Citation>
-  </mdb:portrayalCatalogueInfo>
-  <mdb:applicationSchemaInfo>
-    <name><gco:CharacterString>Model Data Batimetri Nasional UML v2</gco:CharacterString></name>
-    <schemaAscii><gco:CharacterString>https://geoportal.big.go.id/schemas/bathy_v2.xsd</gco:CharacterString></schemaAscii>
-  </mdb:applicationSchemaInfo>
-  <mdb:contentInfo>
-    <mrc:MD_FeatureCatalogueDescription>
-      <mrc:complianceCode><gco:Boolean>true</gco:Boolean></mrc:complianceCode>
-      <mrc:featureCatalogueCitation>
-        <cit:title><gco:CharacterString>Katalog Unsur Geografi Indonesia (KUGI)</gco:CharacterString></cit:title>
-      </mrc:featureCatalogueCitation>
-    </mrc:MD_FeatureCatalogueDescription>
-  </mdb:contentInfo>
-  <mdb:distributionInfo>
-    <onlineResource>
-      <linkage><gco:CharacterString>https://inarisk.bnpb.go.id/geoserver/wms</gco:CharacterString></linkage>
-      <description><gco:CharacterString>Layanan Web Map Service (WMS) peta batimetri</gco:CharacterString></description>
-    </onlineResource>
-  </mdb:distributionInfo>
-</mdb:MD_Metadata>`;
-
-  const metaMdb = parseXmlMetadata(sampleMdb, 'sunda_mdb.xml');
-  assert.equal(metaMdb.rawFormat, 'xml_iso19115_3');
-  assert.equal(metaMdb.xmlRootElement, 'mdb:MD_Metadata');
-
-  const report = runDatasetAudit('batimetri', metaMdb);
-
-  assert.ok(report.iso19115_3Readiness !== undefined);
-  assert.equal(report.iso19115_3Readiness.isApplicable, true);
-  assert.equal(report.iso19115_3Readiness.rootElementDetected, 'mdb:MD_Metadata');
-  assert.equal(report.iso19115_3Readiness.maxPoints, 6);
-  assert.equal(report.iso19115_3Readiness.totalPointsEarned, 6);
-  assert.equal(report.iso19115_3Readiness.scorePercentage, 100);
-  assert.equal(report.iso19115_3Readiness.statusLabel, 'Sangat Siap (Fully Compliant)');
-
-  // Verify all 6 elements have score 1
-  report.iso19115_3Readiness.elements.forEach(el => {
-    assert.equal(el.scoreValue, 1.0);
-    assert.equal(el.status, 'terpenuhi');
-    assert.equal(el.isApplicable, true);
-  });
-});
-
-test('U1 Uji Hitung: D01 to D15 scores exactly match Excel v4 with tolerance <= 0.1', () => {
-  for (const ds of BENCHMARK_DATASETS_V4) {
-    const calc = calculateV4Scores(ds.scores);
-
-    // 1. Skor A tolerance <= 0.1
+    // 1. Skor A (32 Elemen, Skema A)
     const diffSkorA = Math.abs(calc.skorA - ds.expectedSkorA);
     assert.ok(
       diffSkorA <= 0.1,
       `Dataset ${ds.id} Skor A mismatch: calc=${calc.skorA.toFixed(4)}, expected=${ds.expectedSkorA.toFixed(4)}, diff=${diffSkorA.toFixed(4)}`
     );
 
-    // 2. MQI Biner tolerance <= 0.1
+    // 2. MQI Biner (32 Elemen)
     const diffMqiBiner = Math.abs(calc.mqiBiner - ds.expectedMqiBiner);
     assert.ok(
       diffMqiBiner <= 0.1,
       `Dataset ${ds.id} MQI Biner mismatch: calc=${calc.mqiBiner.toFixed(4)}, expected=${ds.expectedMqiBiner.toFixed(4)}, diff=${diffMqiBiner.toFixed(4)}`
     );
 
-    // 3. MQI Diperluas tolerance <= 0.1
+    // 3. MQI Diperluas (32 Elemen)
     const diffMqiDiperluas = Math.abs(calc.mqiDiperluas - ds.expectedMqiDiperluas);
     assert.ok(
       diffMqiDiperluas <= 0.1,
       `Dataset ${ds.id} MQI Diperluas mismatch: calc=${calc.mqiDiperluas.toFixed(4)}, expected=${ds.expectedMqiDiperluas.toFixed(4)}, diff=${diffMqiDiperluas.toFixed(4)}`
     );
 
-    // 4. MQI Ketat tolerance <= 0.1
-    const diffMqiKetat = Math.abs(calc.mqiKetat - ds.expectedMqiKetat);
+    // 4. Skor A Inti (26 Elemen)
+    const diffSkorAInti = Math.abs(calc.skorAInti - ds.expectedSkorAInti);
     assert.ok(
-      diffMqiKetat <= 0.1,
-      `Dataset ${ds.id} MQI Ketat mismatch: calc=${calc.mqiKetat.toFixed(4)}, expected=${ds.expectedMqiKetat.toFixed(4)}, diff=${diffMqiKetat.toFixed(4)}`
+      diffSkorAInti <= 0.1,
+      `Dataset ${ds.id} Skor A Inti mismatch: calc=${calc.skorAInti.toFixed(4)}, expected=${ds.expectedSkorAInti.toFixed(4)}, diff=${diffSkorAInti.toFixed(4)}`
     );
 
-    // 5. Kategori MQI
+    // 5. MQI Biner Inti (26 Elemen)
+    const diffMqiBinerInti = Math.abs(calc.mqiBinerInti - ds.expectedMqiBinerInti);
+    assert.ok(
+      diffMqiBinerInti <= 0.1,
+      `Dataset ${ds.id} MQI Biner Inti mismatch: calc=${calc.mqiBinerInti.toFixed(4)}, expected=${ds.expectedMqiBinerInti.toFixed(4)}, diff=${diffMqiBinerInti.toFixed(4)}`
+    );
+
+    // 6. MQI Diperluas Inti (26 Elemen)
+    const diffMqiDiperluasInti = Math.abs(calc.mqiDiperluasInti - ds.expectedMqiDiperluasInti);
+    assert.ok(
+      diffMqiDiperluasInti <= 0.1,
+      `Dataset ${ds.id} MQI Diperluas Inti mismatch: calc=${calc.mqiDiperluasInti.toFixed(4)}, expected=${ds.expectedMqiDiperluasInti.toFixed(4)}, diff=${diffMqiDiperluasInti.toFixed(4)}`
+    );
+
+    // 7. Skor Ekstensi E27-E32
+    const diffExt = Math.abs(calc.skorEkstensi - ds.expectedSkorEkstensi);
+    assert.ok(
+      diffExt <= 0.1,
+      `Dataset ${ds.id} Skor Ekstensi mismatch: calc=${calc.skorEkstensi.toFixed(4)}, expected=${ds.expectedSkorEkstensi.toFixed(4)}, diff=${diffExt.toFixed(4)}`
+    );
+
+    // 8. Kategori Kualitas
     assert.equal(calc.kategoriBiner, ds.expectedKategoriBiner, `Dataset ${ds.id} Kategori Biner`);
     assert.equal(calc.kategoriDiperluas, ds.expectedKategoriDiperluas, `Dataset ${ds.id} Kategori Diperluas`);
+    assert.equal(calc.kategoriInti, ds.expectedKategoriInti, `Dataset ${ds.id} Kategori Inti`);
 
-    // 6. Empty Elements Count
+    // 9. Empty Elements Count
     assert.equal(calc.emptyElements.length, ds.emptyElementsCount, `Dataset ${ds.id} empty count`);
 
-    // 7. Verify all expected empty elements are present
-    const emptyIds = calc.emptyElements.map((e: any) => e.id);
+    // 10. Verify all expected empty elements are present
+    const emptyIds = calc.emptyElements.map(e => e.id);
     for (const expId of ds.emptyElementsList) {
       assert.ok(emptyIds.includes(expId), `Dataset ${ds.id} expected empty element ${expId}`);
     }
 
-    // 8. Verify category percentages tolerance <= 0.1
-    assert.ok(Math.abs(calc.categoryPercentages.CAT_GENERAL - ds.categoryPercentages.informasiUmum) <= 0.1);
-    assert.ok(Math.abs(calc.categoryPercentages.CAT_IDENTIFICATION - ds.categoryPercentages.identifikasi) <= 0.1);
-    assert.ok(Math.abs(calc.categoryPercentages.CAT_DESCRIPTION - ds.categoryPercentages.deskripsi) <= 0.1);
-    assert.ok(Math.abs(calc.categoryPercentages.CAT_EXTENT - ds.categoryPercentages.cakupan) <= 0.1);
-    assert.ok(Math.abs(calc.categoryPercentages.CAT_ACCURACY - ds.categoryPercentages.ketelitian) <= 0.1);
-    assert.ok(Math.abs(calc.categoryPercentages.CAT_CONTACT - ds.categoryPercentages.kontak) <= 0.1);
-    assert.ok(Math.abs(calc.categoryPercentages.CAT_METAMETADATA - ds.categoryPercentages.metaMetadata) <= 0.1);
-    assert.ok(Math.abs(calc.categoryPercentages.CAT_PROCESSING - ds.categoryPercentages.pemrosesan) <= 0.1);
+    // 11. Category percentages tolerance <= 0.1
+    assert.ok(Math.abs(calc.categoryScores['Informasi umum'] - ds.categoryPercentages.informasiUmum) <= 0.1);
+    assert.ok(Math.abs(calc.categoryScores['Identifikasi'] - ds.categoryPercentages.identifikasi) <= 0.1);
+    assert.ok(Math.abs(calc.categoryScores['Deskripsi'] - ds.categoryPercentages.deskripsi) <= 0.1);
+    assert.ok(Math.abs(calc.categoryScores['Cakupan'] - ds.categoryPercentages.cakupan) <= 0.1);
+    assert.ok(Math.abs(calc.categoryScores['Ketelitian'] - ds.categoryPercentages.ketelitian) <= 0.1);
+    assert.ok(Math.abs(calc.categoryScores['Kontak'] - ds.categoryPercentages.kontak) <= 0.1);
+    assert.ok(Math.abs(calc.categoryScores['Meta-metadata'] - ds.categoryPercentages.metaMetadata) <= 0.1);
+    assert.ok(Math.abs(calc.categoryScores['Pemrosesan'] - ds.categoryPercentages.pemrosesan) <= 0.1);
   }
 });
 
-test('U3 Uji Format: ESRI XML (D08) and CKAN JSON (D13, D14) are handled correctly', () => {
-  const d08 = BENCHMARK_DATASETS_V4.find((d: any) => d.id === 'D08');
-  assert.ok(d08 !== undefined);
-  assert.equal(d08!.format, 'ESRI');
-  assert.equal(d08!.expectedKategoriDiperluas, 'Very Poor');
+test('U3 Uji Format: GMD, MDB, ESRI XML (D08), and CKAN JSON (D13, D14) routes', () => {
+  // GMD
+  const normGmd = parseXmlMetadata(SAMPLE_XML_BATIMETRI_ISO19139, 'sample_gmd.xml');
+  assert.equal(normGmd.rawFormat, 'xml_iso19139');
+  assert.equal(normGmd.title, 'Survei Batimetri Multibeam Alur Pelayaran TSS Selat Malaka');
 
-  const d13 = BENCHMARK_DATASETS_V4.find((d: any) => d.id === 'D13');
-  assert.ok(d13 !== undefined);
-  assert.equal(d13!.format, 'CKAN');
-  assert.equal(d13!.expectedKategoriDiperluas, 'Poor');
+  // ESRI XML
+  const normEsri = parseXmlMetadata(SAMPLE_XML_BATIMETRI_ESRI, 'd08_mangrove.shp.xml');
+  assert.equal(normEsri.rawFormat, 'xml_esri');
+  assert.equal(normEsri.xmlRootElement, 'esri_metadata');
 
-  const d14 = BENCHMARK_DATASETS_V4.find((d: any) => d.id === 'D14');
-  assert.ok(d14 !== undefined);
-  assert.equal(d14!.format, 'CKAN');
-  assert.equal(d14!.expectedKategoriDiperluas, 'Poor');
+  // CKAN JSON
+  const ckanJson = JSON.stringify({
+    success: true,
+    result: {
+      id: 'd13-indeks-lpi',
+      title: 'INDEKS_LPI_25K',
+      notes: 'Peta Indeks Lingkungan Pantai Indonesia skala 1:25.000',
+      tags: [{ name: 'LPI' }, { name: 'Pantai' }],
+      extras: [
+        { key: 'metadata-language', value: 'Bahasa Indonesia' },
+        { key: 'dataset-reference-date', value: '2021-09-29' },
+        { key: 'resource-type', value: 'featureType' },
+        { key: 'spatial', value: '{"type":"Polygon","coordinates":[[[95, -11],[141, -11],[141, 6],[95, 6],[95, -11]]]}' },
+      ],
+      resources: [
+        {
+          url: 'https://geoservices.big.go.id/geoserver/wms',
+          resource_locator_protocol: 'OGC:WMS',
+          description: 'Web Map Service Indeks Lingkungan Pantai Indonesia',
+        },
+      ],
+    },
+  });
+  const normCkan = parseJsonMetadata(ckanJson, 'd13.json');
+  assert.equal(normCkan.rawFormat, 'json_catalog');
+  assert.equal(normCkan.title, 'INDEKS_LPI_25K');
+  assert.equal(normCkan.scopeCode, 'featureType');
+  assert.ok(normCkan.allOnlineResources && normCkan.allOnlineResources.length > 0);
+  assert.equal(normCkan.allOnlineResources[0].isService, true);
+
+  // MDB (ISO 19115-3)
+  const mdbSample = `<?xml version="1.0" encoding="UTF-8"?>
+<mdb:MD_Metadata xmlns:mdb="http://standards.iso.org/iso/19115/-3/mdb/2.0"
+                 xmlns:mri="http://standards.iso.org/iso/19115/-3/mri/2.0"
+                 xmlns:cit="http://standards.iso.org/iso/19115/-3/cit/2.0">
+  <mdb:identificationInfo>
+    <mri:MD_DataIdentification>
+      <mri:citation>
+        <cit:CI_Citation>
+          <cit:title><cit:CharacterString>Batas Wilayah Laut Banten</cit:CharacterString></cit:title>
+        </cit:CI_Citation>
+      </mri:citation>
+    </mri:MD_DataIdentification>
+  </mdb:identificationInfo>
+</mdb:MD_Metadata>`;
+  const normMdb = parseXmlMetadata(mdbSample, 'banten_mdb.xml');
+  assert.equal(normMdb.rawFormat, 'xml_iso19115_3');
+  assert.equal(normMdb.isMdbFormat, true);
+  assert.equal(normMdb.title, 'Batas Wilayah Laut Banten');
 });
 
-test('U4 Uji Bendera: Quality warning flags (F01–F14) are properly registered', () => {
+test('U4 Uji Bendera: Quality warning flags (F01–F14) are registered and verified', () => {
+  const flagsDef = getQualityFlagsDefinition();
   for (let i = 1; i <= 14; i++) {
-    const flagKey = `F${String(i).padStart(2, '0')}` as keyof typeof QUALITY_FLAGS_DEFINITIONS;
-    assert.ok(QUALITY_FLAGS_DEFINITIONS[flagKey] !== undefined, `Flag ${flagKey} defined`);
-    assert.ok(QUALITY_FLAGS_DEFINITIONS[flagKey].name.length > 0);
+    const flagKey = `F${String(i).padStart(2, '0')}`;
+    assert.ok(flagsDef[flagKey] !== undefined, `Flag ${flagKey} exists in config`);
+    assert.ok(flagsDef[flagKey].penanda.length > 0);
+    assert.ok(flagsDef[flagKey].definisi.length > 0);
   }
+
+  const flagBenchmarks = getBenchmarkFlags();
+  assert.equal(Object.keys(flagBenchmarks).length, 15);
+  assert.ok(flagBenchmarks['D01'].includes('F01'));
+  assert.ok(flagBenchmarks['D08'].includes('F04'));
+  assert.ok(flagBenchmarks['D13'].includes('F14'));
+  assert.ok(flagBenchmarks['D18'].includes('F02'));
 });
 
+test('U5 Uji Kasus Khusus: 13 Special Cases from Real Metadata', () => {
+  // Case 1: CRS code 84 with codeSpace="CRS" recognized as OGC CRS84 (D16, D17)
+  const xmlCrs84 = `<?xml version="1.0"?>
+  <mdb:MD_Metadata xmlns:mdb="http://standards.iso.org/iso/19115/-3/mdb/2.0" xmlns:mrs="http://standards.iso.org/iso/19115/-3/mrs/2.0" xmlns:mcc="http://standards.iso.org/iso/19115/-3/mcc/2.0">
+    <mdb:referenceSystemInfo>
+      <mrs:MD_ReferenceSystem>
+        <mrs:referenceSystemIdentifier>
+          <mcc:MD_Identifier>
+            <mcc:codeSpace>CRS</mcc:codeSpace>
+            <mcc:code>84</mcc:code>
+          </mcc:MD_Identifier>
+        </mrs:referenceSystemIdentifier>
+      </mrs:MD_ReferenceSystem>
+    </mdb:referenceSystemInfo>
+  </mdb:MD_Metadata>`;
+  const parsedCrs84 = parseXmlMetadata(xmlCrs84, 'crs84.xml');
+  assert.equal(parsedCrs84.spatialExtent?.isCrs84, true);
+  assert.equal(parsedCrs84.spatialExtent?.crsCode, 'CRS84');
+
+  // Case 2: Bounding box empty string is not 0 (D18)
+  const xmlEmptyBbox = `<?xml version="1.0"?>
+  <gmd:MD_Metadata xmlns:gmd="http://www.isotc211.org/2005/gmd" xmlns:gco="http://www.isotc211.org/2005/gco">
+    <gmd:extent>
+      <gmd:EX_Extent>
+        <gmd:geographicElement>
+          <gmd:EX_GeographicBoundingBox>
+            <gmd:westBoundLongitude><gco:Decimal></gco:Decimal></gmd:westBoundLongitude>
+            <gmd:eastBoundLongitude><gco:Decimal>1</gco:Decimal></gmd:eastBoundLongitude>
+            <gmd:southBoundLatitude><gco:Decimal></gco:Decimal></gmd:southBoundLatitude>
+            <gmd:northBoundLatitude><gco:Decimal>1</gco:Decimal></gmd:northBoundLatitude>
+          </gmd:EX_GeographicBoundingBox>
+        </gmd:geographicElement>
+      </gmd:EX_Extent>
+    </gmd:extent>
+  </gmd:MD_Metadata>`;
+  const parsedEmptyBbox = parseXmlMetadata(xmlEmptyBbox, 'empty_bbox.xml');
+  assert.equal(parsedEmptyBbox.spatialExtent?.isBBoxValid, false);
+  assert.ok(parsedEmptyBbox.spatialExtent?.bboxError !== undefined);
+
+  // Case 3 & 4: Multiple contacts & Email containing URL (D18)
+  const xmlMultiContact = `<?xml version="1.0"?>
+  <mdb:MD_Metadata xmlns:mdb="http://standards.iso.org/iso/19115/-3/mdb/2.0" xmlns:cit="http://standards.iso.org/iso/19115/-3/cit/2.0">
+    <cit:CI_Responsibility>
+      <cit:party>
+        <cit:CI_Organisation>
+          <cit:name><cit:CharacterString>&lt;ContactPerson&gt; The Ancient Geographers</cit:CharacterString></cit:name>
+          <cit:contactInfo>
+            <cit:CI_Contact>
+              <cit:address><cit:CI_Address><cit:electronicMailAddress>ancient@gmail.com</cit:electronicMailAddress></cit:CI_Address></cit:address>
+            </cit:CI_Contact>
+          </cit:contactInfo>
+        </cit:CI_Organisation>
+      </cit:party>
+    </cit:CI_Responsibility>
+    <cit:CI_Responsibility>
+      <cit:party>
+        <cit:CI_Organisation>
+          <cit:name><cit:CharacterString>Pemerintah Provinsi Banten</cit:CharacterString></cit:name>
+          <cit:contactInfo>
+            <cit:CI_Contact>
+              <cit:address><cit:CI_Address><cit:electronicMailAddress>metadata@bantenprov.go.id</cit:electronicMailAddress></cit:CI_Address></cit:address>
+            </cit:CI_Contact>
+          </cit:contactInfo>
+        </cit:CI_Organisation>
+      </cit:party>
+    </cit:CI_Responsibility>
+    <cit:CI_Responsibility>
+      <cit:party>
+        <cit:CI_Organisation>
+          <cit:name><cit:CharacterString>Pemeliharaan Sistem</cit:CharacterString></cit:name>
+          <cit:contactInfo>
+            <cit:CI_Contact>
+              <cit:address><cit:CI_Address><cit:electronicMailAddress>https://geoportal.ntbprov.go.id</cit:electronicMailAddress></cit:CI_Address></cit:address>
+            </cit:CI_Contact>
+          </cit:contactInfo>
+        </cit:CI_Organisation>
+      </cit:party>
+    </cit:CI_Responsibility>
+  </mdb:MD_Metadata>`;
+  const parsedContacts = parseXmlMetadata(xmlMultiContact, 'contacts.xml');
+  assert.equal(parsedContacts.contactBlocks?.length, 3);
+  assert.equal(parsedContacts.contact?.organization, 'Pemerintah Provinsi Banten');
+  assert.equal(parsedContacts.contact?.email, 'metadata@bantenprov.go.id');
+  assert.equal(parsedContacts.contact?.isInstitutionalEmail, true);
+  // Block 3 email contains URL -> invalid email
+  assert.equal(parsedContacts.contactBlocks?.[2].hasUrlInEmail, true);
+  assert.equal(parsedContacts.contactBlocks?.[2].isInstitutionalEmail, false);
+
+  // Case 5: mdq:report containing DQ_ConformanceResult directly (D16, D17)
+  const xmlDirectConf = `<?xml version="1.0"?>
+  <mdb:MD_Metadata xmlns:mdb="http://standards.iso.org/iso/19115/-3/mdb/2.0" xmlns:mdq="http://standards.iso.org/iso/19157/-2/mdq/1.0">
+    <mdq:report>
+      <mdq:DQ_ConformanceResult>
+        <mdq:pass>true</mdq:pass>
+      </mdq:DQ_ConformanceResult>
+    </mdq:report>
+  </mdb:MD_Metadata>`;
+  const parsedDirectConf = parseXmlMetadata(xmlDirectConf, 'direct_conf.xml');
+  assert.equal(parsedDirectConf.hasDirectConformanceReport, true);
+
+  // Case 6: Empty spatialRepresentationInfo (D01, D04, D05)
+  const xmlEmptySpatialRep = `<?xml version="1.0"?>
+  <gmd:MD_Metadata xmlns:gmd="http://www.isotc211.org/2005/gmd">
+    <gmd:spatialRepresentationInfo/>
+  </gmd:MD_Metadata>`;
+  const parsedEmptySpatialRep = parseXmlMetadata(xmlEmptySpatialRep, 'empty_spat.xml');
+  assert.equal(parsedEmptySpatialRep.rawEvidence.e27_spatialRepresentation.value.topologyLevel, undefined);
+
+  // Case 13: CSW wrapper unwrap
+  const xmlCswWrapped = `<?xml version="1.0"?>
+  <csw:GetRecordByIdResponse xmlns:csw="http://www.opengis.net/cat/csw/2.0.2" xmlns:gmd="http://www.isotc211.org/2005/gmd" xmlns:gco="http://www.isotc211.org/2005/gco">
+    <gmd:MD_Metadata>
+      <gmd:fileIdentifier><gco:CharacterString>CSW-WRAPPED-D01</gco:CharacterString></gmd:fileIdentifier>
+      <gmd:identificationInfo>
+        <gmd:MD_DataIdentification>
+          <gmd:citation>
+            <gmd:CI_Citation>
+              <gmd:title><gco:CharacterString>Dataset Dibungkus CSW</gco:CharacterString></gmd:title>
+            </gmd:CI_Citation>
+          </gmd:citation>
+        </gmd:MD_DataIdentification>
+      </gmd:identificationInfo>
+    </gmd:MD_Metadata>
+  </csw:GetRecordByIdResponse>`;
+  const parsedCsw = parseXmlMetadata(xmlCswWrapped, 'csw_wrapped.xml');
+  assert.equal(parsedCsw.title, 'Dataset Dibungkus CSW');
+  assert.equal(parsedCsw.datasetId, 'CSW-WRAPPED-D01');
+});

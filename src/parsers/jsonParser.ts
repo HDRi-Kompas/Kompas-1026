@@ -1,5 +1,6 @@
 /**
- * KOMPAS - JSON Metadata Parser
+ * KOMPAS - JSON Metadata Parser (v7)
+ * Comprehensive parser for CKAN JSON (package_show), DCAT, and open data catalog schemas.
  * Distinguishes missing vs null vs empty string vs empty array vs placeholder vs unparsed JSON string.
  */
 
@@ -25,6 +26,11 @@ export function parseJsonMetadata(jsonString: string, fileName = 'metadata.json'
       parseWarnings: warnings,
       parseErrors: errors,
     };
+  }
+
+  // Handle standard CKAN wrapper: { help: ..., success: true, result: { ... } }
+  if (data && typeof data === 'object' && data.result && typeof data.result === 'object') {
+    data = data.result;
   }
 
   // If top-level is an array, take the first element if it's a catalog list
@@ -58,6 +64,20 @@ export function parseJsonMetadata(jsonString: string, fileName = 'metadata.json'
     };
   }
 
+  // Extract CKAN extras into a dictionary
+  const extrasMap: Record<string, string> = {};
+  if (Array.isArray(data.extras)) {
+    for (const item of data.extras) {
+      if (item && typeof item === 'object' && item.key) {
+        extrasMap[item.key.toLowerCase()] = item.value !== undefined && item.value !== null ? String(item.value).trim() : '';
+      }
+    }
+  } else if (data.extras && typeof data.extras === 'object') {
+    for (const [k, v] of Object.entries(data.extras)) {
+      extrasMap[k.toLowerCase()] = v !== undefined && v !== null ? String(v).trim() : '';
+    }
+  }
+
   // Deep search with state distinction
   function getProp(obj: any, candidates: string[]): { value: any; path: string; state: 'found' | 'null' | 'empty_str' | 'empty_arr' | 'empty_obj' | 'placeholder' | 'unparsed_json' } | null {
     if (!obj || typeof obj !== 'object') return null;
@@ -71,7 +91,6 @@ export function parseJsonMetadata(jsonString: string, fileName = 'metadata.json'
         if (typeof val === 'string') {
           const trimmed = val.trim();
           if (trimmed.length === 0) return { value: '', path, state: 'empty_str' };
-          // Check if it is an unparsed JSON string e.g. "{\"bbox\": [100, 0, 105, 5]}"
           if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
             try {
               const unparsed = JSON.parse(trimmed);
@@ -97,7 +116,7 @@ export function parseJsonMetadata(jsonString: string, fileName = 'metadata.json'
 
     // Recurse into nested objects
     for (const k of Object.keys(obj)) {
-      if (typeof obj[k] === 'object' && obj[k] !== null) {
+      if (typeof obj[k] === 'object' && obj[k] !== null && k !== 'extras' && k !== 'resources') {
         const nested = getProp(obj[k], candidates);
         if (nested) {
           return { ...nested, path: `${k}.${nested.path}` };
@@ -107,7 +126,7 @@ export function parseJsonMetadata(jsonString: string, fileName = 'metadata.json'
     return null;
   }
 
-  // Extract core fields
+  // 1. Title (E04)
   const titleProp = getProp(data, ['title', 'name', 'dataset_title', 'nama_dataset', 'judul']);
   let title: string | undefined;
   if (titleProp) {
@@ -119,93 +138,186 @@ export function parseJsonMetadata(jsonString: string, fileName = 'metadata.json'
     rawEvidence.title = { value: titleProp.value, path: titleProp.path, isPlaceholder: titleProp.state === 'placeholder' };
   }
 
+  // 2. Identifier (E06)
   const idProp = getProp(data, ['id', 'uuid', 'identifier', 'dataset_id', 'kode']);
-  let datasetId: string | undefined;
-  if (idProp && idProp.state === 'found') {
-    datasetId = String(idProp.value);
-    rawEvidence.datasetId = { value: idProp.value, path: idProp.path, isPlaceholder: false };
+  let datasetId: string | undefined = extrasMap['guid'] || (idProp && idProp.state === 'found' ? String(idProp.value) : undefined);
+  if (datasetId) {
+    rawEvidence.datasetId = { value: datasetId, path: idProp?.path || 'extras.guid', isPlaceholder: false };
   }
 
-  const absProp = getProp(data, ['description', 'abstract', 'notes', 'ringkasan', 'deskripsi']);
+  // 3. Abstract (E07)
+  const absProp = getProp(data, ['notes', 'description', 'abstract', 'ringkasan', 'deskripsi']);
   let abstract: string | undefined;
   if (absProp) {
     abstract = typeof absProp.value === 'string' ? absProp.value : undefined;
     rawEvidence.abstract = { value: absProp.value, path: absProp.path, isPlaceholder: absProp.state === 'placeholder' };
   }
 
+  // 4. Purpose (E08) - CKAN typically doesn't have a distinct purpose field
   const purposeProp = getProp(data, ['purpose', 'tujuan', 'objective']);
   const purpose = typeof purposeProp?.value === 'string' ? purposeProp.value : undefined;
 
-  // Keywords
-  const kwProp = getProp(data, ['keywords', 'tags', 'kata_kunci', 'theme']);
-  let keywords: string[] = [];
-  if (kwProp && Array.isArray(kwProp.value)) {
-    keywords = kwProp.value.map((k: any) => typeof k === 'string' ? k : k?.name || k?.label || '').filter(Boolean);
-  } else if (kwProp && typeof kwProp.value === 'string') {
-    keywords = kwProp.value.split(',').map((s: string) => s.trim()).filter(Boolean);
+  // 5. Language (E01) - extras: metadata-language
+  const metaLangExtra = extrasMap['metadata-language'] || extrasMap['language'] || extrasMap['data-language'];
+  let language = metaLangExtra || (typeof data.language === 'string' ? data.language : undefined);
+  if (language) {
+    rawEvidence.language = { value: language, path: 'extras: metadata-language', isPlaceholder: isPlaceholderValue(language) };
   }
 
-  // BBox & Extent
+  // 6. Keywords (E09) - tags
+  const keywords: string[] = [];
+  if (Array.isArray(data.tags)) {
+    for (const tag of data.tags) {
+      if (typeof tag === 'string') keywords.push(tag);
+      else if (tag && typeof tag === 'object' && tag.name) keywords.push(tag.name);
+    }
+  } else if (typeof data.tags === 'string') {
+    keywords.push(...data.tags.split(',').map((s: string) => s.trim()).filter(Boolean));
+  }
+
+  // 7. Bounding box (E13) - extras: spatial or bbox
   let west: number | undefined;
   let east: number | undefined;
   let south: number | undefined;
   let north: number | undefined;
+  let isBBoxValid = true;
+  let bboxError: string | undefined;
 
-  const bboxProp = getProp(data, ['bbox', 'spatial_extent', 'batas_wilayah', 'bounding_box', 'spatial']);
-  if (bboxProp?.value) {
-    let bboxVal = bboxProp.value;
-    if (typeof bboxVal === 'string' && (bboxProp.state as string) === 'unparsed_json') {
-      bboxVal = bboxProp.value;
-    }
-    if (Array.isArray(bboxVal) && bboxVal.length === 4) {
-      // standard [minX, minY, maxX, maxY]
-      west = Number(bboxVal[0]);
-      south = Number(bboxVal[1]);
-      east = Number(bboxVal[2]);
-      north = Number(bboxVal[3]);
-    } else if (typeof bboxVal === 'object') {
-      west = Number(bboxVal.west ?? bboxVal.minX ?? bboxVal.xmin);
-      south = Number(bboxVal.south ?? bboxVal.minY ?? bboxVal.ymin);
-      east = Number(bboxVal.east ?? bboxVal.maxX ?? bboxVal.xmax);
-      north = Number(bboxVal.north ?? bboxVal.maxY ?? bboxVal.ymax);
+  const rawSpatial = extrasMap['spatial'] || extrasMap['bbox'];
+  if (rawSpatial) {
+    try {
+      const parsedGeo = JSON.parse(rawSpatial);
+      if (parsedGeo.type === 'Polygon' && Array.isArray(parsedGeo.coordinates?.[0])) {
+        const ring = parsedGeo.coordinates[0];
+        const lons = ring.map((pt: any) => pt[0]);
+        const lats = ring.map((pt: any) => pt[1]);
+        west = Math.min(...lons);
+        east = Math.max(...lons);
+        south = Math.min(...lats);
+        north = Math.max(...lats);
+      } else if (Array.isArray(parsedGeo) && parsedGeo.length === 4) {
+        west = parsedGeo[0];
+        south = parsedGeo[1];
+        east = parsedGeo[2];
+        north = parsedGeo[3];
+      }
+    } catch {
+      // not JSON polygon
     }
   }
 
-  // CRS
-  const crsProp = getProp(data, ['crs', 'srs', 'spatial_reference', 'epsg', 'sistem_koordinat']);
-  let crsName: string | undefined;
-  if (crsProp && crsProp.value) {
-    crsName = typeof crsProp.value === 'string' ? crsProp.value : crsProp.value?.name || crsProp.value?.code || JSON.stringify(crsProp.value);
-    rawEvidence.crs = { value: crsName, path: crsProp.path, isPlaceholder: isPlaceholderValue(crsName) };
+  if (west === undefined && extrasMap['bbox-west-long']) {
+    west = parseFloat(extrasMap['bbox-west-long']);
+    east = parseFloat(extrasMap['bbox-east-long']);
+    south = parseFloat(extrasMap['bbox-south-lat']);
+    north = parseFloat(extrasMap['bbox-north-lat']);
   }
 
-  // Contact / Maintainer / Kustodian
-  const orgProp = getProp(data, ['organization', 'publisher', 'author', 'instansi', 'kustodian', 'maintainer', 'department']);
-  const emailProp = getProp(data, ['author_email', 'maintainer_email', 'contact_email', 'email', 'kontak']);
-  const contactNameProp = getProp(data, ['author_name', 'maintainer_name', 'contact_name', 'kontak_person']);
+  if (west === undefined || east === undefined || south === undefined || north === undefined) {
+    const bboxProp = getProp(data, ['bbox', 'spatial_extent', 'batas_wilayah', 'bounding_box']);
+    if (bboxProp?.value) {
+      const b = bboxProp.value;
+      if (Array.isArray(b) && b.length === 4) {
+        west = Number(b[0]);
+        south = Number(b[1]);
+        east = Number(b[2]);
+        north = Number(b[3]);
+      }
+    }
+  }
 
-  const contactOrg = orgProp && typeof orgProp.value === 'string' ? orgProp.value : orgProp?.value?.title || orgProp?.value?.name;
-  const contactEmail = emailProp && typeof emailProp.value === 'string' ? emailProp.value : undefined;
-  const contactName = contactNameProp && typeof contactNameProp.value === 'string' ? contactNameProp.value : undefined;
+  if (west === undefined || east === undefined || south === undefined || north === undefined) {
+    isBBoxValid = false;
+    bboxError = 'Bounding box tidak ditemukan pada atribut spasial CKAN.';
+  } else if (isNaN(west) || isNaN(east) || isNaN(south) || isNaN(north)) {
+    isBBoxValid = false;
+    bboxError = 'Koordinat bounding box bukan angka numerik valid.';
+  } else if (west >= east || south >= north) {
+    isBBoxValid = false;
+    bboxError = 'Koordinat bounding box terbalik.';
+  }
 
-  if (orgProp) rawEvidence.contactOrg = { value: contactOrg, path: orgProp.path, isPlaceholder: isPlaceholderValue(contactOrg) };
-  if (emailProp) rawEvidence.contactEmail = { value: contactEmail, path: emailProp.path, isPlaceholder: isPlaceholderValue(contactEmail) };
+  // 8. CRS (E15) - extras: spatial-reference-system
+  const crsExtra = extrasMap['spatial-reference-system'] || extrasMap['srs'] || extrasMap['crs'];
+  const crsName = crsExtra || (typeof data.spatial_reference === 'string' ? data.spatial_reference : undefined);
+  if (crsName) {
+    rawEvidence.crs = { value: crsName, path: 'extras: spatial-reference-system', isPlaceholder: isPlaceholderValue(crsName) };
+  }
 
-  // Dates
-  const pubDateProp = getProp(data, ['metadata_created', 'issued', 'publication_date', 'tanggal_rilis', 'created', 'date']);
-  const revDateProp = getProp(data, ['metadata_modified', 'modified', 'revision_date', 'tanggal_pembaruan', 'updated']);
-  const pubDate = pubDateProp && typeof pubDateProp.value === 'string' ? pubDateProp.value : undefined;
-  const revDate = revDateProp && typeof revDateProp.value === 'string' ? revDateProp.value : undefined;
+  // 9. Contact (E19, E20) - extras: responsible-party, contact-email
+  const respParty = extrasMap['responsible-party'] || data.organization?.title || data.organization?.name || data.author;
+  const contactEmail = extrasMap['contact-email'] || data.author_email || data.maintainer_email;
+  const isEmailPh = isPlaceholderValue(contactEmail) || contactEmail === 'Belum Ada' || contactEmail === '-';
 
-  // Accuracy
-  const tvuProp = getProp(data, ['tvu', 'vertical_uncertainty', 'ketidakpastian_vertikal']);
-  const thuProp = getProp(data, ['thu', 'horizontal_uncertainty', 'ketidakpastian_horizontal']);
-  const vDatumProp = getProp(data, ['vertical_datum', 'datum_vertikal', 'sounding_datum', 'pasut']);
-  const sensorProp = getProp(data, ['sensor', 'instrument', 'peralatan_survei', 'echosounder']);
+  const contactBlocks: {
+    organization?: string;
+    individualName?: string;
+    role?: string;
+    email?: string;
+    phone?: string;
+    address?: string;
+    isPlaceholder?: boolean;
+    hasUrlInEmail?: boolean;
+    isInstitutionalEmail?: boolean;
+  }[] = [];
 
-  // Lineage
-  const lineageProp = getProp(data, ['lineage', 'silsilah_data', 'metodologi', 'methodology', 'processing']);
-  const lineage = lineageProp && typeof lineageProp.value === 'string' ? lineageProp.value : undefined;
+  const isInstEmail = !!(contactEmail && !isEmailPh && !/@(gmail|yahoo|hotmail)\.com/i.test(contactEmail) && /\.(go\.id|ac\.id|mil\.id|gov)/i.test(contactEmail));
+
+  contactBlocks.push({
+    organization: respParty,
+    individualName: data.author_name || data.maintainer,
+    role: extrasMap['responsible-party.roles'] || 'publisher',
+    email: isEmailPh ? undefined : contactEmail,
+    isPlaceholder: isPlaceholderValue(respParty) || isEmailPh,
+    hasUrlInEmail: !!(contactEmail && /https?:\/\//i.test(contactEmail)),
+    isInstitutionalEmail: isInstEmail,
+  });
+
+  // 10. Dates (E05, E22)
+  const refDate = extrasMap['dataset-reference-date'] || data.metadata_created;
+  const metaDate = extrasMap['metadata-date'] || data.metadata_modified || data.metadata_created;
+
+  // 11. Lineage (E24)
+  const lineage = extrasMap['lineage'] || (typeof data.lineage === 'string' ? data.lineage : undefined);
+
+  // 12. Resources (E03, E32) & Kurasi status (F14)
+  const allOnlineResources: {
+    url: string;
+    protocol?: string;
+    name?: string;
+    description?: string;
+    isService?: boolean;
+    isDirectDownload?: boolean;
+    isLocalPath?: boolean;
+  }[] = [];
+
+  let hasCurationRejection = false;
+  if (Array.isArray(data.resources)) {
+    for (const r of data.resources) {
+      if (r && typeof r === 'object' && r.url) {
+        const proto = r.resource_locator_protocol || r.protocol || r.format;
+        const isSvc = /wms|wfs|csw|mapserver|featureserver/i.test(`${r.url} ${proto || ''}`);
+        const isDl = /download|export|shape-zip/i.test(`${r.url} ${proto || ''}`);
+
+        allOnlineResources.push({
+          url: r.url,
+          protocol: proto,
+          name: r.name,
+          description: r.description,
+          isService: isSvc,
+          isDirectDownload: isDl,
+          isLocalPath: false,
+        });
+
+        if (r.review_status === 'rejected' || /format data tidak sesuai|rejected/i.test(r.kurasi_notes_extra || '')) {
+          hasCurationRejection = true;
+        }
+      }
+    }
+  }
+
+  // 13. Scope (E28) - extras: resource-type
+  const scopeCode = extrasMap['resource-type'] || 'dataset';
 
   return {
     rawFormat: 'json_catalog',
@@ -217,37 +329,35 @@ export function parseJsonMetadata(jsonString: string, fileName = 'metadata.json'
     abstract,
     purpose,
     keywords,
+    language,
     spatialExtent: {
       westBoundLongitude: isNaN(west as number) ? undefined : west,
       eastBoundLongitude: isNaN(east as number) ? undefined : east,
       southBoundLatitude: isNaN(south as number) ? undefined : south,
       northBoundLatitude: isNaN(north as number) ? undefined : north,
       crsName,
+      isBBoxValid,
+      bboxError,
     },
     temporalExtent: {
-      publicationDate: pubDate,
-      revisionDate: revDate,
+      publicationDate: refDate,
+      revisionDate: metaDate,
     },
     contact: {
-      organization: contactOrg,
-      individualName: contactName,
-      email: contactEmail,
-      isPlaceholder: isPlaceholderValue(contactOrg) || isPlaceholderValue(contactEmail),
+      organization: respParty,
+      email: isEmailPh ? undefined : contactEmail,
+      isPlaceholder: isPlaceholderValue(respParty) || isEmailPh,
+      isInstitutionalEmail: isInstEmail,
     },
-    accuracy: {
-      totalVerticalUncertainty: tvuProp?.value,
-      totalHorizontalUncertainty: thuProp?.value,
-      verticalDatum: vDatumProp?.value,
-      sensorType: sensorProp?.value,
-      soundVelocityCorrected: false,
-      tideCorrected: !!vDatumProp?.value,
-    },
+    contactBlocks,
+    allOnlineResources,
+    scopeCode,
     processing: {
       lineageStatement: lineage,
     },
     metaMetadata: {
-      standardName: 'Indonesian Marine Spatial Data Catalog / CKAN JSON',
-      metadataDate: pubDate || revDate,
+      standardName: undefined, // CKAN records do not specify ISO metadata standard name
+      metadataDate: metaDate,
     },
     rawEvidence,
     parseWarnings: warnings,
