@@ -152,13 +152,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-5">
           <div className="flex items-center justify-between text-slate-400 mb-2">
-            <span className="text-xs font-medium uppercase tracking-wider">Lolos Standar SNI</span>
+            <span className="text-xs font-medium uppercase tracking-wider">Kelengkapan Inti Tinggi</span>
             <FileCheck2 className="w-4 h-4 text-cyan-400" />
           </div>
           <div className="text-2xl font-bold font-mono text-white tabular-nums">
             {compliantCount}
           </div>
-          <div className="text-xs text-slate-500 mt-1">Peraturan BIG No. 3 / ISO 19115</div>
+          <div className="text-xs text-slate-500 mt-1">Skor inti ≥ 75% (indikasi kelengkapan)</div>
         </div>
 
         <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-5">

@@ -97,8 +97,6 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
     for (const el of elements) {
       if (report.elementValuesV7 && report.elementValuesV7[el.id] !== undefined) {
         initial[el.id] = report.elementValuesV7[el.id];
-      } else if (report.elementValuesV4 && report.elementValuesV4[el.id] !== undefined) {
-        initial[el.id] = report.elementValuesV4[el.id];
       } else {
         const matched = report.coreElementsResults?.find(r => r.elementId === el.id || r.ruleId === el.id);
         initial[el.id] = matched?.status === 'terpenuhi' ? 1 : matched?.status === 'perlu_ditinjau' ? 0.5 : 0;
@@ -139,7 +137,7 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
     setManualOverrides(updatedOverrides);
 
     // Revert to original auto score
-    const autoScore = report.elementValuesV7?.[elementId] ?? report.elementValuesV4?.[elementId] ?? 0;
+    const autoScore = report.elementValuesV7?.[elementId] ?? 0;
     setElementScores(prev => ({ ...prev, [elementId]: autoScore }));
   };
 
@@ -170,7 +168,41 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
     reader.readAsText(file);
   };
 
-  // 17-Column Export CSV implementation
+  // Helper to determine true source group name per Section 14 (not internal profileId)
+  const resolveSourceGroup = (title: string, rep: AuditReport): string => {
+    const benchmarks = getBenchmarkDatasetsV7();
+    const matchedBenchmark = benchmarks.find(
+      b => b.title.toLowerCase().trim() === title.toLowerCase().trim() || b.id === rep.id
+    );
+    if (matchedBenchmark?.sourceGroup) {
+      return matchedBenchmark.sourceGroup;
+    }
+    const profileMap: Record<string, string> = {
+      batimetri: 'BIG / Hidrografi',
+      kelautan_umum: 'Portal daerah',
+      kawasan_konservasi: 'Portal KKP',
+      terumbu_karang: 'Portal KKP',
+      mangrove: 'Portal KKP',
+      habitat_bentik: 'Portal KKP',
+      arkeologi_maritim: 'Portal KKP',
+      jalur_migrasi: 'Portal daerah',
+    };
+    return profileMap[rep.profileId] || 'Portal daerah';
+  };
+
+  // Format machine vs override record per Section 14
+  const formatMachineVsOverride = () => {
+    const entries = Object.entries(manualOverrides);
+    if (entries.length === 0) return '-';
+    return entries
+      .map(([elId, ov]) => {
+        const machineVal = report.elementValuesV7?.[elId] ?? 0.5;
+        return `${elId}[mesin=${machineVal},override=${ov.value}${ov.notes ? `,catatan=${ov.notes.replace(/[;,\n]/g, ' ')}` : ''}]`;
+      })
+      .join('; ');
+  };
+
+  // 17-Column Single-Dataset Export CSV (Section 14 Compliant)
   const handleExportCsv = () => {
     const catScores = [
       activeV7.categoryScores['Informasi umum']?.toFixed(1) || '0.0',
@@ -183,27 +215,26 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
       activeV7.categoryScores['Pemrosesan']?.toFixed(1) || '0.0',
     ];
 
-    const core26Values = elements.filter(e => e.inti).map(e => elementScores[e.id] ?? 0);
-    const ext6Values = elements.filter(e => !e.inti).map(e => elementScores[e.id] ?? 0);
-
-    const emptyListStr = activeV7.emptyElements.map(e => `${e.id} (w=${e.weight})`).join(', ');
-    const pendingReviewList = elements
-      .filter(e => openDecisions.assessmentModes[e.id] === 'M' && manualOverrides[e.id] === undefined)
-      .map(e => e.id)
-      .join(', ');
-
-    const triggeredFlagsStr = (report.qualityFlags || []).filter(f => f.isTriggered).map(f => f.id).join(', ');
-    const overrideStr = Object.entries(manualOverrides).map(([k, v]) => `${k}=${v.value}`).join('; ');
+    const all32Values = elements.map(e => elementScores[e.id] ?? 0);
+    const emptyListStr = activeV7.emptyElements.map(e => e.id).join(', ') || '-';
+    const triggeredFlagsStr = (report.qualityFlags || []).filter(f => f.isTriggered).map(f => f.id).join(', ') || '-';
+    const sourceGroup = resolveSourceGroup(activeDatasetTitle, report);
+    const machineVsOverrideStr = formatMachineVsOverride();
 
     const headers = [
-      'ID_Dataset',
+      'Dataset_ID',
       'Judul_Dataset',
       'Kelompok_Sumber',
       'Status_Format',
-      'Skor_A',
-      'MQI_Biner',
-      'MQI_Diperluas',
-      'Kategori_MQI',
+      'Skor_Utama_Skema_A',
+      'Skor_MQI_Biner',
+      'Skor_MQI_Diperluas',
+      'Kategori_MQI_Diperluas',
+      'Kategori_MQI_Biner',
+      'Skor_Inti_26_SkorA',
+      'Skor_Inti_26_MQIBiner',
+      'Skor_Inti_26_MQIDiperluas',
+      'Skor_Ekstensi_6',
       'Skor_Kat_InfoUmum',
       'Skor_Kat_Identifikasi',
       'Skor_Kat_Deskripsi',
@@ -212,13 +243,10 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
       'Skor_Kat_Kontak',
       'Skor_Kat_MetaMetadata',
       'Skor_Kat_Pemrosesan',
-      ...elements.filter(e => e.inti).map(e => `Nilai_${e.id}`),
-      'Skor_Ekstensi',
-      ...elements.filter(e => !e.inti).map(e => `Nilai_${e.id}`),
-      'Daftar_Elemen_Kosong',
-      'Daftar_Elemen_Belum_Dinilai',
-      'Daftar_Peringatan',
-      'Override',
+      ...elements.map(e => `Nilai_${e.id}`),
+      'Elemen_Kosong',
+      'Penanda_Kualitas',
+      'Nilai_Mesin_vs_Override',
       'Catatan_Auditor',
       'Versi_Aturan',
     ];
@@ -226,21 +254,23 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
     const row = [
       `"${report.id}"`,
       `"${(activeDatasetTitle || '').replace(/"/g, '""')}"`,
-      `"${report.profileId}"`,
+      `"${sourceGroup}"`,
       `"${activeFormat}"`,
       activeV7.skorA.toFixed(2),
       activeV7.mqiBiner.toFixed(2),
       activeV7.mqiDiperluas.toFixed(2),
       `"${activeV7.kategoriDiperluas}"`,
-      ...catScores,
-      ...core26Values,
+      `"${activeV7.kategoriBiner}"`,
+      activeV7.skorAInti.toFixed(2),
+      activeV7.mqiBinerInti.toFixed(2),
+      activeV7.mqiDiperluasInti.toFixed(2),
       activeV7.skorEkstensi.toFixed(2),
-      ...ext6Values,
+      ...catScores,
+      ...all32Values,
       `"${emptyListStr}"`,
-      `"${pendingReviewList || '-'}"`,
-      `"${triggeredFlagsStr || '-'}"`,
-      `"${overrideStr.replace(/"/g, '""') || '-'}"`,
-      `"${auditorNotes.replace(/"/g, '""') || '-'}"`,
+      `"${triggeredFlagsStr}"`,
+      `"${machineVsOverrideStr.replace(/"/g, '""')}"`,
+      `"${(auditorNotes || '-').replace(/"/g, '""')}"`,
       `"${activeV7.versiAturan}"`,
     ];
 
@@ -254,41 +284,120 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
     document.body.removeChild(link);
   };
 
+  // Batch Export 15 Datasets for Chapter 4 Heat Map & Evaluation Matrix (Section 14)
+  const handleExportBatch15Csv = () => {
+    const benchmarks = getBenchmarkDatasetsV7();
+    const headers = [
+      'Dataset_ID',
+      'Judul_Dataset',
+      'Kelompok_Sumber',
+      'Status_Format',
+      'Skor_Utama_Skema_A',
+      'Skor_MQI_Biner',
+      'Skor_MQI_Diperluas',
+      'Kategori_MQI_Diperluas',
+      'Kategori_MQI_Biner',
+      'Skor_Inti_26_SkorA',
+      'Skor_Inti_26_MQIBiner',
+      'Skor_Inti_26_MQIDiperluas',
+      'Skor_Ekstensi_6',
+      'Skor_Kat_InfoUmum',
+      'Skor_Kat_Identifikasi',
+      'Skor_Kat_Deskripsi',
+      'Skor_Kat_Cakupan',
+      'Skor_Kat_Ketelitian',
+      'Skor_Kat_Kontak',
+      'Skor_Kat_MetaMetadata',
+      'Skor_Kat_Pemrosesan',
+      ...elements.map(e => `Nilai_${e.id}`),
+      'Elemen_Kosong',
+      'Penanda_Kualitas',
+      'Nilai_Mesin_vs_Override',
+      'Versi_Aturan',
+    ];
+
+    const rows = benchmarks.map(b => {
+      const eScores = elements.map(el => b.scores[el.id] ?? 0);
+      const cat = b.categoryPercentages;
+      return [
+        `"${b.id}"`,
+        `"${b.title.replace(/"/g, '""')}"`,
+        `"${b.sourceGroup}"`,
+        `"${b.format}"`,
+        b.expectedSkorA.toFixed(2),
+        b.expectedMqiBiner.toFixed(2),
+        b.expectedMqiDiperluas.toFixed(2),
+        `"${b.expectedKategoriDiperluas}"`,
+        `"${b.expectedKategoriBiner}"`,
+        b.expectedSkorAInti.toFixed(2),
+        b.expectedMqiBinerInti.toFixed(2),
+        b.expectedMqiDiperluasInti.toFixed(2),
+        b.expectedSkorEkstensi.toFixed(2),
+        cat.informasiUmum.toFixed(1),
+        cat.identifikasi.toFixed(1),
+        cat.deskripsi.toFixed(1),
+        cat.cakupan.toFixed(1),
+        cat.ketelitian.toFixed(1),
+        cat.kontak.toFixed(1),
+        cat.metaMetadata.toFixed(1),
+        cat.pemrosesan.toFixed(1),
+        ...eScores,
+        `"${b.emptyElementsList.join(', ') || '-'}"`,
+        `"${b.expectedFlags.join(', ') || '-'}"`,
+        `"-"`,
+        `"${activeV7.versiAturan}"`,
+      ].join(',');
+    });
+
+    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + headers.join(',') + '\n' + rows.join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `KOMPAS_Bab4_Matriks_15_Dataset_${activeV7.versiAturan}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   // 17-Column Export JSON implementation
   const handleExportJson = () => {
+    const sourceGroup = resolveSourceGroup(activeDatasetTitle, report);
     const exportData = {
       ID_Dataset: report.id,
       Judul_Dataset: activeDatasetTitle,
-      Kelompok_Sumber: report.profileId,
+      Kelompok_Sumber: sourceGroup,
       Status_Format: activeFormat,
-      Skor_A: Number(activeV7.skorA.toFixed(4)),
-      MQI_Biner: Number(activeV7.mqiBiner.toFixed(4)),
-      MQI_Diperluas: Number(activeV7.mqiDiperluas.toFixed(4)),
+      Skor_Utama_Skema_A: Number(activeV7.skorA.toFixed(4)),
+      Skor_MQI_Biner: Number(activeV7.mqiBiner.toFixed(4)),
+      Skor_MQI_Diperluas: Number(activeV7.mqiDiperluas.toFixed(4)),
       MQI_Ketat: Number(activeV7.mqiKetat.toFixed(4)),
-      Skor_A_Inti_26: Number(activeV7.skorAInti.toFixed(4)),
-      MQI_Biner_Inti_26: Number(activeV7.mqiBinerInti.toFixed(4)),
-      MQI_Diperluas_Inti_26: Number(activeV7.mqiDiperluasInti.toFixed(4)),
-      Kategori_MQI: activeV7.kategoriDiperluas,
-      Kategori_Biner: activeV7.kategoriBiner,
-      Kategori_Inti: activeV7.kategoriInti,
-      Skor_Kategori: activeV7.categoryScores,
-      Nilai_E01_sd_E26: Object.fromEntries(
-        elements.filter(e => e.inti).map(e => [e.id, elementScores[e.id] ?? 0])
-      ),
-      Skor_Ekstensi: Number(activeV7.skorEkstensi.toFixed(4)),
-      Nilai_E27_sd_E32: Object.fromEntries(
-        elements.filter(e => !e.inti).map(e => [e.id, elementScores[e.id] ?? 0])
+      Kategori_MQI_Diperluas: activeV7.kategoriDiperluas,
+      Kategori_MQI_Biner: activeV7.kategoriBiner,
+      Skor_Inti_26_SkorA: Number(activeV7.skorAInti.toFixed(4)),
+      Skor_Inti_26_MQIBiner: Number(activeV7.mqiBinerInti.toFixed(4)),
+      Skor_Inti_26_MQIDiperluas: Number(activeV7.mqiDiperluasInti.toFixed(4)),
+      Kategori_Inti_Diperluas: activeV7.kategoriInti,
+      Skor_Ekstensi_6: Number(activeV7.skorEkstensi.toFixed(4)),
+      Skor_8_Kategori: activeV7.categoryScores,
+      Nilai_E01_sd_E32: Object.fromEntries(
+        elements.map(e => [e.id, elementScores[e.id] ?? 0])
       ),
       Daftar_Elemen_Kosong: activeV7.emptyElements,
       Daftar_Elemen_Belum_Dinilai: elements
         .filter(e => openDecisions.assessmentModes[e.id] === 'M' && manualOverrides[e.id] === undefined)
         .map(e => e.id),
-      Daftar_Peringatan: (report.qualityFlags || []).filter(f => f.isTriggered).map(f => ({
+      Penanda_Kualitas: (report.qualityFlags || []).filter(f => f.isTriggered).map(f => ({
         id: f.id,
         name: f.name,
         evidence: f.evidence,
       })),
-      Override: manualOverrides,
+      Nilai_Mesin_vs_Override: Object.entries(manualOverrides).map(([elId, ov]) => ({
+        elementId: elId,
+        machineValue: report.elementValuesV7?.[elId] ?? 0.5,
+        auditorOverrideValue: ov.value,
+        notes: ov.notes,
+        updatedAt: ov.updatedAt,
+      })),
       Catatan_Auditor: auditorNotes,
       Versi_Aturan: activeV7.versiAturan,
       Waktu_Audit: report.timestamp,
@@ -298,6 +407,43 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
     const link = document.createElement('a');
     link.setAttribute('href', jsonContent);
     link.setAttribute('download', `KOMPAS_Audit_${report.id}_${activeV7.versiAturan}.json`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Batch Export 15 Datasets as JSON
+  const handleExportBatch15Json = () => {
+    const benchmarks = getBenchmarkDatasetsV7();
+    const batchData = {
+      judul: 'Matriks Evaluasi Kualitas Metadata Geospasial Maritim (15 Dataset Sampel Bab 4)',
+      versi_aturan: activeV7.versiAturan,
+      total_dataset: benchmarks.length,
+      datasets: benchmarks.map(b => ({
+        Dataset_ID: b.id,
+        Judul_Dataset: b.title,
+        Kelompok_Sumber: b.sourceGroup,
+        Status_Format: b.format,
+        Skor_Utama_Skema_A: b.expectedSkorA,
+        Skor_MQI_Biner: b.expectedMqiBiner,
+        Skor_MQI_Diperluas: b.expectedMqiDiperluas,
+        Kategori_MQI_Diperluas: b.expectedKategoriDiperluas,
+        Kategori_MQI_Biner: b.expectedKategoriBiner,
+        Skor_Inti_26_SkorA: b.expectedSkorAInti,
+        Skor_Inti_26_MQIBiner: b.expectedMqiBinerInti,
+        Skor_Inti_26_MQIDiperluas: b.expectedMqiDiperluasInti,
+        Skor_Ekstensi_6: b.expectedSkorEkstensi,
+        Skor_8_Kategori: b.categoryPercentages,
+        Nilai_E01_sd_E32: b.scores,
+        Elemen_Kosong: b.emptyElementsList,
+        Penanda_Kualitas: b.expectedFlags,
+      })),
+    };
+
+    const jsonContent = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(batchData, null, 2));
+    const link = document.createElement('a');
+    link.setAttribute('href', jsonContent);
+    link.setAttribute('download', `KOMPAS_Bab4_Matriks_15_Dataset_${activeV7.versiAturan}.json`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -372,10 +518,19 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
           </button>
           <button
             onClick={handleExportCsv}
+            title="Ekspor laporan dataset ini dalam 17 kolom standar"
             className="px-3 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl transition-all flex items-center gap-1.5 shadow-sm"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>Ekspor CSV (17 Kolom)</span>
+            <span>Ekspor CSV (Dataset Aktif)</span>
+          </button>
+          <button
+            onClick={handleExportBatch15Csv}
+            title="Ekspor 15 baris dataset sekaligus untuk peta panas & matriks evaluasi Bab 4"
+            className="px-3 py-2 text-xs font-semibold text-amber-300 hover:text-amber-200 bg-amber-950/40 hover:bg-amber-950/70 border border-amber-800/80 rounded-xl transition-all flex items-center gap-1.5 shadow-sm"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Ekspor 15 Dataset Bab 4 (CSV Matriks)</span>
           </button>
           <button
             onClick={handleExportJson}
@@ -383,6 +538,13 @@ export const AuditResultsView: React.FC<AuditResultsViewProps> = ({
           >
             <Download className="w-3.5 h-3.5" />
             <span>Ekspor JSON</span>
+          </button>
+          <button
+            onClick={handleExportBatch15Json}
+            className="px-3 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl transition-all flex items-center gap-1.5 shadow-sm"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Batch 15 (JSON)</span>
           </button>
           <button
             onClick={() => window.print()}

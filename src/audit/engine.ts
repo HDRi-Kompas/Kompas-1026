@@ -196,16 +196,15 @@ export function runDatasetAudit(
           const std = metadata.metaMetadata?.standardName || '';
           const ver = metadata.metaMetadata?.standardVersion || '';
           valFound = `${std} ${ver}`.trim() || null;
-          if (!std && !isMdb) {
+          if (!std) {
             autoScore = 0;
-            message = 'Standar metadata tidak dinyatakan.';
+            message = 'Standar metadata tidak dinyatakan dalam berkas.';
           } else if (
-            /SNI\s*8843-1:2019|ISO\s*19115-1:2014|ISO\s*19115-3/i.test(std) ||
-            isMdb
+            /SNI\s*8843-1:2019|ISO\s*19115-1:2014|ISO\s*19115-3/i.test(std)
           ) {
             autoScore = 1;
-            message = `Menyebutkan standar resmi mutakhir ("${valFound || 'ISO 19115-3'}").`;
-            evidence = `Standard: ${valFound || 'ISO 19115-3'}`;
+            message = `Menyebutkan standar resmi mutakhir ("${valFound}").`;
+            evidence = `Standard: ${valFound}`;
           } else {
             autoScore = 0.5;
             message = `Menyebutkan standar lama atau spesifikasi implementasi ("${valFound}").`;
@@ -973,8 +972,8 @@ export function runDatasetAudit(
     coreScore: v7Scoring.skorAInti,
     passedCount: v7Scoring.countScore1,
     totalCoreCount: 26,
-    statusLabel: v7Scoring.skorAInti >= 75 ? 'Lolos Standar ISO 19115' : 'Belum Memenuhi Standar Penuh',
-    summaryNotes: `Kepatuhan dihitung dari 26 elemen inti ISO 19115. Skor inti: ${v7Scoring.skorAInti.toFixed(1)}%.`,
+    statusLabel: v7Scoring.skorAInti >= 75 ? 'Kelengkapan Elemen Inti Tinggi (≥ 75%)' : 'Kelengkapan Elemen Inti Belum Optimal (< 75%)',
+    summaryNotes: 'Catatan Metodologis: Skor kuantitatif mengukur tingkat kelengkapan elemen dan tidak membuktikan kepatuhan formal atau yuridis terhadap standar ISO 19115.',
     elements: [],
     standardReference: 'SNI ISO 19115:2012 / ISO 19115-1:2014',
   };
@@ -1002,8 +1001,6 @@ export function runDatasetAudit(
     manualOverrides,
     auditorNotes,
     statusSkema,
-    skorEkstensiV4: v7Scoring.skorEkstensi,
-    elementValuesV4: elementValuesV7,
     elementValuesV7,
   };
 }

@@ -245,7 +245,7 @@ export function parseJsonMetadata(jsonString: string, fileName = 'metadata.json'
   }
 
   // 9. Contact (E19, E20) - extras: responsible-party, contact-email
-  const respParty = extrasMap['responsible-party'] || data.organization?.title || data.organization?.name || data.author;
+  const respParty = extrasMap['responsible-party'] || data.organization?.title || data.organization?.name || data.author || data.maintainer;
   const contactEmail = extrasMap['contact-email'] || data.author_email || data.maintainer_email;
   const isEmailPh = isPlaceholderValue(contactEmail) || contactEmail === 'Belum Ada' || contactEmail === '-';
 
@@ -297,7 +297,7 @@ export function parseJsonMetadata(jsonString: string, fileName = 'metadata.json'
       if (r && typeof r === 'object' && r.url) {
         const proto = r.resource_locator_protocol || r.protocol || r.format;
         const isSvc = /wms|wfs|csw|mapserver|featureserver/i.test(`${r.url} ${proto || ''}`);
-        const isDl = /download|export|shape-zip/i.test(`${r.url} ${proto || ''}`);
+        const isDl = /download|export|shape-zip|\.zip$|\.geojson$|\.json$|\.shp$|\.kml$|\.tif$/i.test(`${r.url} ${proto || ''}`) || /wfs|featureserver/i.test(`${r.url} ${proto || ''}`);
 
         allOnlineResources.push({
           url: r.url,

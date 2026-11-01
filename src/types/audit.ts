@@ -368,15 +368,12 @@ export interface AuditReport {
     description: string;
     remediation: string;
   }[];
-  // V4 & V7 Excel Data Audit extensions
-  v4Scoring?: import('../audit/v4Rules').V4ScoreCalculationResult;
+  // V7 Data Audit specifications
   v7Scoring?: import('../audit/v7Scoring').V7ScoreResult;
   ruleVersion?: string;
   qualityFlags?: import('../audit/flags').QualityFlagResult[];
   manualOverrides?: Record<string, { value: number; notes: string; auditorName?: string; updatedAt: string }>;
   auditorNotes?: string;
   statusSkema?: 'gmd' | 'mdb' | 'ESRI' | 'CKAN' | 'unknown';
-  skorEkstensiV4?: number | null;
-  elementValuesV4?: Record<string, number>;
   elementValuesV7?: Record<string, number>;
 }
