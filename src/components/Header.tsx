@@ -41,8 +41,12 @@ export const Header: React.FC<HeaderProps> = ({
             className="flex items-center gap-2.5 text-left text-white hover:text-cyan-400 transition-colors shrink-0 group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500 rounded"
             aria-label="KOMPAS Beranda"
           >
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-500 to-blue-700 flex items-center justify-center text-white shadow-md shadow-cyan-900/40">
-              <Compass className="w-5 h-5 text-white" />
+            <div className="w-10 h-10 rounded-lg overflow-hidden bg-white/5 border border-cyan-500/30 flex items-center justify-center shadow-md shadow-cyan-900/40 p-0.5 group-hover:border-cyan-400 group-hover:shadow-cyan-500/20 transition-all shrink-0">
+              <img
+                src="/kompas-logo.jpeg"
+                alt="Logo KOMPAS"
+                className="w-full h-full object-contain rounded"
+              />
             </div>
             <div className="flex flex-col">
               <span className="text-xl font-bold tracking-tight text-white group-hover:text-cyan-300 transition-colors">

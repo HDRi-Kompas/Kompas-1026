@@ -60,18 +60,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     <div className="space-y-8">
       {/* Hero Strip */}
       <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-slate-900 via-slate-850 to-blue-950 border border-slate-800 p-6 sm:p-8">
-        <div className="relative z-10 max-w-3xl">
+        {/* Full-bleed Seamless White Gradient & Watermark Background */}
+        <div className="absolute inset-0 pointer-events-none select-none overflow-hidden z-0">
+          {/* Comprehensive white ambient gradient across the entire card */}
+          <div className="absolute inset-0 bg-gradient-to-l from-white/25 via-white/[0.08] to-transparent" />
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_85%_50%,_var(--tw-gradient-stops))] from-white/30 via-cyan-500/15 to-transparent" />
+
+          {/* Logo Watermark with mask applied directly to image, bleeding past right border */}
+          <div className="absolute inset-y-0 right-0 w-full sm:w-4/5 md:w-3/4 lg:w-2/3 flex items-center justify-end opacity-30">
+            <img
+              src="/kompas-logo.jpeg"
+              alt=""
+              aria-hidden="true"
+              className="h-full w-auto max-w-none object-contain filter contrast-125 translate-x-12"
+              style={{
+                maskImage: 'linear-gradient(to right, transparent 0%, rgba(0,0,0,0.2) 25%, rgba(0,0,0,0.7) 60%, rgba(0,0,0,1) 90%, rgba(0,0,0,1) 100%)',
+                WebkitMaskImage: 'linear-gradient(to right, transparent 0%, rgba(0,0,0,0.2) 25%, rgba(0,0,0,0.7) 60%, rgba(0,0,0,1) 90%, rgba(0,0,0,1) 100%)',
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Foreground Content */}
+        <div className="relative z-10 max-w-2xl sm:max-w-3xl">
           <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-cyan-400 mb-2">
             <span className="px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-800 text-cyan-300 font-semibold">
-              STANDAR ISO 19115 & SNI ISO 19115
+              STANDAR ISO 19115 &amp; SNI ISO 19115
             </span>
             <span aria-hidden="true">·</span>
-            <span>LANDASAN MQI HASARA & KARUNANAYAKA (2026)</span>
+            <span>LANDASAN MQI HASARA &amp; KARUNANAYAKA (2026)</span>
             <span aria-hidden="true">·</span>
             <span>IHO S-102 / S-44</span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight mb-3">
-            Audit Kualitas Metadata & Data Spasial Kelautan
+          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white tracking-tight mb-3">
+            Audit Kualitas Metadata &amp; Data Spasial Kelautan
           </h1>
           <p className="text-slate-300 text-sm sm:text-base leading-relaxed mb-6">
             KOMPAS mengaudit kesesuaian standar internasional <strong className="text-cyan-300 font-semibold">ISO 19115-1:2014</strong> dan standar nasional <strong className="text-emerald-300 font-semibold">SNI ISO 19115:2012 (BSN/BIG)</strong> serta menghitung indeks mutu kuantitatif <strong className="text-white font-semibold">Metadata Quality Index (MQI)</strong> dengan transparansi penuh formula matematis dan tanpa simulasi rekaan.

@@ -8,7 +8,12 @@ import { createServer as createViteServer } from 'vite';
 import fs from 'fs';
 import path from 'path';
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+// Parse CLI arguments (e.g. --port 3000) passed by npm run dev
+const args = process.argv.slice(2);
+const portArgIdx = args.indexOf('--port');
+const cliPort = portArgIdx !== -1 && args[portArgIdx + 1] ? parseInt(args[portArgIdx + 1], 10) : null;
+// In development, dev server must run on port 3000 (ignoring container PORT env var which is 8080)
+const PORT = cliPort || (process.env.NODE_ENV === 'production' && process.env.PORT ? parseInt(process.env.PORT, 10) : 3000);
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'kompas_db.json');
 
