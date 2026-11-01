@@ -53,7 +53,7 @@ export const Header: React.FC<HeaderProps> = ({
                 KOMPAS
               </span>
               <span className="text-[10px] tracking-wider uppercase text-cyan-400 font-mono -mt-1">
-                ISO 19115 · MQI Audit
+                ISO · SNI · MQI
               </span>
             </div>
           </button>

@@ -610,13 +610,11 @@ export default function App() {
           <div className="text-center sm:text-left">
             <span className="font-bold text-white">KOMPAS</span> · Sistem Audit Kualitas Metadata dan Dataset Geospasial Kelautan Berbasis MQI
             <div className="text-[11px] text-slate-500 mt-0.5">
-              Landasan: K. M. D. Hasara & K. A. N. C. Karunanayaka (2026), Sabaragamuwa University of Sri Lanka.
+              Hilmi Najwan Ardhani, Dimas Rizky, Tri Untung
             </div>
           </div>
           <div className="flex items-center gap-4 text-slate-400 font-mono text-[11px]">
-            <span>MSDI Audit Standard v2.4</span>
-            <span aria-hidden="true">·</span>
-            <span>WGS 84 / IHO S-44 / ISO 19139</span>
+            <span>Diponegoro University</span>
           </div>
         </div>
       </footer>

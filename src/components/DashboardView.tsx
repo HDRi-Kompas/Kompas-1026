@@ -83,15 +83,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         {/* Foreground Content */}
         <div className="relative z-10 max-w-2xl sm:max-w-3xl">
-          <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-cyan-400 mb-2">
-            <span className="px-2 py-0.5 rounded bg-cyan-950/80 border border-cyan-800 text-cyan-300 font-semibold">
-              STANDAR ISO 19115 &amp; SNI ISO 19115
-            </span>
-            <span aria-hidden="true">·</span>
-            <span>LANDASAN MQI HASARA &amp; KARUNANAYAKA (2026)</span>
-            <span aria-hidden="true">·</span>
-            <span>IHO S-102 / S-44</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white tracking-tight mb-3">
             Audit Kualitas Metadata &amp; Data Spasial Kelautan
           </h1>
