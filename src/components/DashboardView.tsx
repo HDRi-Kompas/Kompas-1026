@@ -212,7 +212,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               Belum Ada Sesi Audit yang Dijalankan
             </h3>
             <p className="text-xs text-slate-500 max-w-md mx-auto mb-5 leading-relaxed">
-              Silakan unggah berkas metadata atau data spasial kelautan Anda untuk memulai audit kualitas berdasarkan standar SNI ISO 19115 dan Peraturan BIG No. 3 Tahun 2023.
+              Silahkan unggah berkas metadata kelautan Anda
             </p>
             <button
               onClick={onNavigateUpload}
